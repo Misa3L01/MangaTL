@@ -11,7 +11,7 @@ import pytest
 from mangatl.config import Settings
 from mangatl.models import GlossaryEntry, Project
 from mangatl.project_io import ProjectPaths
-from mangatl.translation.base import Translator, translate_chapter
+from mangatl.translation.base import TranslationError, Translator, translate_chapter
 from mangatl.translation.manual_backend import export_prompt, import_translation
 from mangatl.translation.ollama_backend import SCHEMA, OllamaTranslator
 from mangatl.translation.prompts import BlockContext, block_message, system_prompt
@@ -153,6 +153,49 @@ def test_ollama_request_uses_schema_num_ctx_and_no_thinking(
     assert body["options"]["num_ctx"] == settings.translator.ollama.num_ctx
     assert "source_text_corrected" in SCHEMA["properties"]["regions"]["items"]["required"]
     assert tr.stats.output_tokens == 50
+
+
+def repeat_limit() -> httpx.Response:
+    return httpx.Response(500, json={"error": "prediction aborted, token repeat limit reached"})
+
+
+def test_repeat_loop_fails_the_block_by_default(settings: Settings, small_project: Project) -> None:
+    tr, _ = make_ollama(settings, [repeat_limit()])
+    with pytest.raises(TranslationError, match="repeat limit"):
+        tr.translate_block("sys", ctx_for(small_project))
+
+
+def test_repeat_loop_is_retried_with_another_seed(
+    settings: Settings, small_project: Project
+) -> None:
+    settings.translator.ollama.recover_repeat_loops = True
+    ctx = ctx_for(small_project)
+    tr, reqs = make_ollama(
+        settings, [repeat_limit(), ollama_reply(fake_answer(ctx).model_dump_json())]
+    )
+    assert len(tr.translate_block("sys", ctx).regions) == 3
+    assert "seed" not in reqs[0]["options"]
+    assert reqs[1]["options"]["seed"] == 1
+    assert reqs[1]["options"]["temperature"] > settings.translator.ollama.temperature
+
+
+def test_persistent_loop_splits_the_block_and_isolates_the_region(
+    settings: Settings, small_project: Project
+) -> None:
+    settings.translator.ollama.recover_repeat_loops = True
+    settings.translator.max_retries = 0
+    ctx = ctx_for(small_project)  # 3 regions: B01, B02, B03
+
+    def answer(body: dict) -> httpx.Response:
+        user = body["messages"][1]["content"]
+        if '"P001-B03"' in user:  # B03 always loops
+            return repeat_limit()
+        ids = [r for r in ctx.regions if f'"{r.id}"' in user]
+        return ollama_reply(fake_answer(BlockContext("S", "1", [1], ids)).model_dump_json())
+
+    tr, _ = make_ollama(settings, [answer] * 10)
+    result = tr.translate_block("sys", ctx)
+    assert sorted(r.id for r in result.regions) == ["P001-B01", "P001-B02"]
 
 
 def test_ollama_retries_invalid_json_with_the_error(

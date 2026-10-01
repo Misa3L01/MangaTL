@@ -62,6 +62,10 @@ class TruncatedOutputError(TranslationError):
     pass
 
 
+class RepetitionLoopError(TranslationError):
+    """Ollama aborted the answer: the model kept repeating a token (e.g. '¡¡¡¡…')."""
+
+
 def parse_block(content: str) -> BlockTranslation:
     """Validate the model reply, tolerating text around the JSON object."""
     try:
@@ -88,7 +92,12 @@ class OllamaTranslator(Translator):
         self.realigned = 0
 
     # ------------------------------------------------------------------ transport
-    def _chat(self, messages: list[dict[str, str]], schema: dict | None = None) -> str:
+    def _chat(
+        self,
+        messages: list[dict[str, str]],
+        schema: dict | None = None,
+        options: dict[str, float] | None = None,
+    ) -> str:
         payload = {
             "model": self.model,
             "messages": messages,
@@ -96,15 +105,20 @@ class OllamaTranslator(Translator):
             "stream": False,
             "think": self.cfg.think,
             "keep_alive": "15m",
-            "options": {"num_ctx": self.cfg.num_ctx, "temperature": self.cfg.temperature},
+            "options": {
+                "num_ctx": self.cfg.num_ctx,
+                "temperature": self.cfg.temperature,
+                **(options or {}),
+            },
         }
         try:
             resp = self._client.post(f"{self.base_url}/api/chat", json=payload)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise TranslationError(
-                f"Ollama respondió {exc.response.status_code}: {exc.response.text[:300]}"
-            ) from exc
+            message = f"Ollama respondió {exc.response.status_code}: {exc.response.text[:300]}"
+            if "repeat limit" in exc.response.text:
+                raise RepetitionLoopError(message) from exc
+            raise TranslationError(message) from exc
         except httpx.HTTPError as exc:
             raise TranslationError(
                 f"No se pudo contactar a Ollama en {self.base_url}: {exc}"
@@ -131,8 +145,20 @@ class OllamaTranslator(Translator):
     def _ask(self, system: str, user: str) -> BlockTranslation:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         last_error: Exception | None = None
+        options: dict[str, float] = {}
         for attempt in range(self.max_retries + 1):
-            content = self._chat(messages)
+            try:
+                content = self._chat(messages, options=options)
+            except RepetitionLoopError:
+                if not self.cfg.recover_repeat_loops or attempt == self.max_retries:
+                    raise
+                # Another seed and a little more temperature usually get out of the loop.
+                log.warning("El modelo entró en un bucle de repetición: se reintenta")
+                options = {
+                    "seed": attempt + 1,
+                    "temperature": min(1.0, self.cfg.temperature + 0.2 * (attempt + 1)),
+                }
+                continue
             try:
                 return parse_block(content)
             except ValidationError as exc:
@@ -156,23 +182,37 @@ class OllamaTranslator(Translator):
         )
 
     # ------------------------------------------------------------------ block
+    def _split(self, system: str, ctx: BlockContext) -> BlockTranslation:
+        half = len(ctx.regions) // 2
+        first = self.translate_block(system, replace(ctx, regions=ctx.regions[:half]))
+        second = self.translate_block(
+            system, replace(ctx, regions=ctx.regions[half:], previous_lines=ctx.regions[:half])
+        )
+        return BlockTranslation(
+            regions=first.regions + second.regions,
+            block_summary=f"{first.block_summary} {second.block_summary}".strip(),
+            new_glossary_entries=first.new_glossary_entries + second.new_glossary_entries,
+        )
+
     def translate_block(self, system: str, ctx: BlockContext) -> BlockTranslation:
         try:
             result = self._ask(system, block_message(ctx))
         except TruncatedOutputError:
             if len(ctx.regions) <= 1:
                 raise
-            half = len(ctx.regions) // 2
             log.warning("Bloque demasiado largo para el contexto: se divide en dos")
-            first = self.translate_block(system, replace(ctx, regions=ctx.regions[:half]))
-            second = self.translate_block(
-                system, replace(ctx, regions=ctx.regions[half:], previous_lines=ctx.regions[:half])
-            )
-            return BlockTranslation(
-                regions=first.regions + second.regions,
-                block_summary=f"{first.block_summary} {second.block_summary}".strip(),
-                new_glossary_entries=first.new_glossary_entries + second.new_glossary_entries,
-            )
+            return self._split(system, ctx)
+        except RepetitionLoopError:
+            if not self.cfg.recover_repeat_loops:
+                raise
+            if len(ctx.regions) <= 1:
+                # Isolated: this region stays untranslated and is flagged for review.
+                log.warning(
+                    "%s: el modelo no sale del bucle; queda sin traducir", ctx.regions[0].id
+                )
+                return BlockTranslation(regions=[], block_summary="")
+            log.warning("Bucle de repetición persistente: el bloque se divide en dos")
+            return self._split(system, ctx)
 
         expected = [r.id for r in ctx.regions]
         unknown = {rt.id for rt in result.regions} - set(expected)
@@ -191,7 +231,12 @@ class OllamaTranslator(Translator):
                 len(missing),
                 ", ".join(r.id for r in missing[:6]),
             )
-            sub = self._ask(system, block_message(replace(ctx, regions=missing)))
+            try:
+                sub = self._ask(system, block_message(replace(ctx, regions=missing)))
+            except RepetitionLoopError:
+                if not self.cfg.recover_repeat_loops:
+                    raise
+                break  # the missing regions stay flagged for review
             sub_regions, moved = realign(missing, sub.regions)
             self.realigned += moved
             fresh = [rt for rt in sub_regions if rt.id not in got]

@@ -108,6 +108,9 @@ class OllamaConfig(BaseModel):
     models_dir: Path = Path("models/ollama")
     flash_attention: bool = True
     kv_cache_type: Literal["f16", "q8_0", "q4_0"] = "q8_0"
+    # When Ollama aborts an answer because the model loops ("¡¡¡¡…", HTTP 500 "token repeat
+    # limit"): retry with another seed, then split the block, instead of failing the chapter.
+    recover_repeat_loops: bool = False
 
 
 class TranslatorConfig(BaseModel):
