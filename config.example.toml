@@ -41,6 +41,7 @@ use_lama = true              # LaMa para texto sobre dibujo/tramas y letras que 
 lama_url = "https://github.com/Sanster/models/releases/download/AnimeMangaInpainting/anime-manga-big-lama.pt"
 lama_file = "models/lama/anime-manga-big-lama.pt"
 lama_max_side = 1024         # lado máximo del recorte que procesa LaMa (menos = menos VRAM)
+join_text_areas = false      # experimental: limpiar también las zonas del globo que separa una línea de texto pegada al borde
 
 [translator]
 backend = "ollama"           # "ollama" (local) o "manual" (chat de claude.ai)

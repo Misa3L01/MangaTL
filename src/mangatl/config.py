@@ -89,6 +89,9 @@ class InpaintConfig(BaseModel):
     )
     lama_file: Path = Path("models/lama/anime-manga-big-lama.pt")
     lama_max_side: int = Field(1024, ge=256)
+    # Experimental: also clean the bright areas of a bubble split off by a line of text that
+    # touches the outline on both sides (their glyphs and the dividing line were left).
+    join_text_areas: bool = False
 
 
 class OllamaConfig(BaseModel):

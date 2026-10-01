@@ -47,6 +47,46 @@ def interior_on_page(region_draft) -> np.ndarray:
     return full
 
 
+def split_box_page() -> tuple[np.ndarray, list[RawDetection]]:
+    """Caption box whose first line of text touches both sides of the outline."""
+    page = screentone()
+    cv2.rectangle(page, (150, 100), (450, 500), 255, -1)
+    cv2.rectangle(page, (150, 100), (450, 500), 0, 3)
+    cv2.rectangle(page, (200, 110), (215, 120), 0, -1)  # glyph above the dividing line
+    for x in range(152, 448, 24):  # the dividing line: glyphs joined by a stroke
+        cv2.rectangle(page, (x, 125), (min(x + 20, 448), 145), 0, -1)
+    cv2.rectangle(page, (152, 134), (448, 136), 0, -1)
+    for x in (220, 300, 380):  # more text below
+        for y in range(170, 300, 30):
+            cv2.rectangle(page, (x - 10, y), (x + 10, y + 18), 0, -1)
+    dets = [
+        RawDetection("bubble", (148, 98, 453, 503), 0.97),
+        RawDetection("text_bubble", (155, 105, 445, 320), 0.95),
+    ]
+    return page, dets
+
+
+def text_mask_on_page(draft) -> np.ndarray:
+    x0, y0, x1, y1 = draft.crop
+    full = np.zeros((600, 600), bool)
+    full[y0:y1, x0:x1] = draft.text_mask
+    return full
+
+
+def test_join_text_areas_cleans_text_split_off_by_a_line_touching_the_outline() -> None:
+    page, dets = split_box_page()
+    [plain] = build_regions(page, dets, DetectionConfig(), InpaintConfig())
+    [joined] = build_regions(page, dets, DetectionConfig(), InpaintConfig(join_text_areas=True))
+    before, after = text_mask_on_page(plain), text_mask_on_page(joined)
+    top_glyph = (slice(110, 121), slice(200, 216))
+    line = (slice(126, 145), slice(170, 430))
+    assert before[top_glyph].mean() < 0.5 and before[line].mean() < 0.5
+    assert after[top_glyph].all() and after[line].mean() > 0.9
+    # The outline itself is never part of the mask.
+    assert not after[100:503, 148:153].any() and not after[100:503, 448:453].any()
+    assert not after[98:103, 148:453].any()
+
+
 def test_interior_follows_the_ellipse_and_text_mask_spares_the_outline() -> None:
     page, dets = bubble_page()
     [draft] = build_regions(page, dets, DetectionConfig(), InpaintConfig())
