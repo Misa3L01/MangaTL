@@ -20,7 +20,7 @@ from mangatl.translation.prompts import BlockContext
 from tests.test_translation import fake_answer
 
 COMPACT_REPLY = {
-    "r": [
+    "regions": [
         {"id": "P001-B01", "src": "はい！", "who": "Saitō", "es": "¡Sí!", "st": "shout", "c": 0.9},
         {
             "id": "P001-B02",
@@ -32,9 +32,31 @@ COMPACT_REPLY = {
             "alt": "Corto",
         },
     ],
-    "sum": "Resumen.",
-    "gl": [{"src": "斉藤", "es": "Saitō", "cat": "character", "note": "residente"}],
+    "block_summary": "Resumen.",
+    "new_glossary_entries": [
+        {"source": "斉藤", "target": "Saitō", "category": "character", "notes": "residente"}
+    ],
 }
+
+
+def test_only_the_region_keys_are_short() -> None:
+    # Same top level as the regular schema (the glossary list is optional there too).
+    assert set(COMPACT_SCHEMA["required"]) == {"regions", "block_summary"}
+    assert "new_glossary_entries" in COMPACT_SCHEMA["properties"]
+    item = COMPACT_SCHEMA["properties"]["regions"]["items"]
+    assert set(item["required"]) == {"id", "src", "who", "es", "st", "c"}
+    glossary = COMPACT_SCHEMA["properties"]["new_glossary_entries"]["items"]
+    assert "target" in glossary["properties"]
+
+
+def test_first_version_with_one_letter_top_keys_is_still_read() -> None:
+    old = {
+        "r": [{"id": "P1", "src": "a", "who": "x", "es": "b", "st": "normal", "c": 1}],
+        "sum": "S.",
+        "gl": [{"src": "斉藤", "es": "Saitō", "cat": "character"}],
+    }
+    block = parse_block(json.dumps(old, ensure_ascii=False), compact=True)
+    assert block.block_summary == "S." and block.new_glossary_entries[0].target == "Saitō"
 
 
 def test_expand_compact_maps_every_key() -> None:
@@ -71,13 +93,13 @@ def test_compact_request_uses_short_schema_and_instructions(
     ctx = BlockContext("S", "1", [1], small_project.pages[0].regions)
     full = fake_answer(ctx)
     reply = {
-        "r": [
+        "regions": [
             {"id": r.id, "src": r.source_text_corrected, "who": r.speaker, "es": r.translation}
             | {"st": r.style, "c": r.confidence}
             for r in full.regions
         ],
-        "sum": full.block_summary,
-        "gl": [],
+        "block_summary": full.block_summary,
+        "new_glossary_entries": [],
     }
     sent: list[dict] = []
 

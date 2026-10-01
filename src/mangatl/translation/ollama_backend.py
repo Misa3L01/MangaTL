@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
@@ -44,9 +45,11 @@ def _ollama_schema() -> dict:
 
 SCHEMA = _ollama_schema()
 
-# translator.compact_output: same content with 1-3 letter keys and the JSON on one line. Local
+# translator.compact_output: short keys inside each region and the JSON on one line. Local
 # models emit every key of every region, so long names cost tokens (generation is ~97 % of the
-# translation time on a 6 GB GPU). The source echo is kept: alignment depends on it.
+# translation time on a 6 GB GPU). The source echo is kept: alignment depends on it. The keys
+# that appear once per block keep their names: with cryptic ones ("gl") the model stopped
+# proposing glossary entries.
 COMPACT_REGION_KEYS = {
     "id": "id",
     "src": "source_text_corrected",
@@ -58,81 +61,61 @@ COMPACT_REGION_KEYS = {
     "note": "translator_note",
     "ord": "reading_order",
 }
-COMPACT_GLOSSARY_KEYS = {"src": "source", "es": "target", "cat": "category", "note": "notes"}
 COMPACT_INSTRUCTIONS = """
 # Compact output (mandatory)
-Use these short keys instead of the long names above: `r` = regions; in each region `id`, \
+Inside each entry of `regions` (they repeat for every balloon) use these short keys: `id`, \
 `src` = source_text_corrected, `who` = speaker, `es` = translation, `st` = style, \
 `c` = confidence, and only when they apply `alt` = shorter_alternative, `note` = \
-translator_note, `ord` = reading_order; `sum` = block_summary; `gl` = new_glossary_entries \
-with `src` = source, `es` = target, `cat` = category, `note` = notes. Write the whole JSON on \
-a single line, with no indentation and no spaces between keys and values."""
+translator_note, `ord` = reading_order. Keep `regions`, `block_summary` and \
+`new_glossary_entries` (with `source`, `target`, `category`, `notes`) as described above, \
+and keep proposing glossary entries. Write the whole JSON on a single line, with no \
+indentation and no spaces between keys and values."""
 
 
 def _compact_schema() -> dict:
-    region = SCHEMA["properties"]["regions"]["items"]["properties"]
-    glossary = SCHEMA["properties"]["new_glossary_entries"]["items"]["properties"]
-    return {
+    schema = copy.deepcopy(SCHEMA)
+    style = schema["properties"]["regions"]["items"]["properties"]["style"]
+    schema["properties"]["regions"]["items"] = {
         "type": "object",
         "properties": {
-            "r": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string"},
-                        "src": {"type": "string"},
-                        "who": {"type": "string"},
-                        "es": {"type": "string"},
-                        "st": region["style"],
-                        "c": {"type": "number"},
-                        "alt": {"type": "string"},
-                        "note": {"type": "string"},
-                        "ord": {"type": "integer"},
-                    },
-                    "required": ["id", "src", "who", "es", "st", "c"],
-                },
-            },
-            "sum": {"type": "string"},
-            "gl": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "src": {"type": "string"},
-                        "es": {"type": "string"},
-                        "cat": glossary["category"],
-                        "note": {"type": "string"},
-                    },
-                    "required": ["src", "es", "cat"],
-                },
-            },
+            "id": {"type": "string"},
+            "src": {"type": "string"},
+            "who": {"type": "string"},
+            "es": {"type": "string"},
+            "st": style,
+            "c": {"type": "number"},
+            "alt": {"type": "string"},
+            "note": {"type": "string"},
+            "ord": {"type": "integer"},
         },
-        "required": ["r", "sum", "gl"],
+        "required": ["id", "src", "who", "es", "st", "c"],
     }
+    return schema
 
 
 COMPACT_SCHEMA = _compact_schema()
 
 
 def expand_compact(obj: dict) -> dict:
-    """Compact reply -> the regular BlockTranslation shape."""
+    """Reply with short region keys -> the regular BlockTranslation shape (long keys, and the
+    one-letter top-level keys of the first version, are accepted too)."""
     regions = []
-    for item in obj.get("r") or []:
+    for item in obj.get("regions") or obj.get("r") or []:
         if not isinstance(item, dict):
             continue
         region = {COMPACT_REGION_KEYS.get(k, k): v for k, v in item.items()}
         if region.get("shorter_alternative"):
             region["fits_capacity"] = False
         regions.append(region)
+    legacy = {"src": "source", "es": "target", "cat": "category", "note": "notes"}
     glossary = [
-        {COMPACT_GLOSSARY_KEYS.get(k, k): v for k, v in entry.items()}
-        for entry in obj.get("gl") or []
+        {legacy.get(k, k): v for k, v in entry.items()}
+        for entry in obj.get("new_glossary_entries") or obj.get("gl") or []
         if isinstance(entry, dict)
     ]
     return {
         "regions": regions,
-        "block_summary": obj.get("sum") or "",
+        "block_summary": obj.get("block_summary") or obj.get("sum") or "",
         "new_glossary_entries": glossary,
     }
 
@@ -177,9 +160,8 @@ def parse_block(content: str, compact: bool = False) -> BlockTranslation:
         for obj in candidates:
             if not isinstance(obj, dict):
                 continue
-            long_form = "r" not in obj and "regions" in obj  # the model ignored the short keys
-            try:
-                return BlockTranslation.model_validate(obj if long_form else expand_compact(obj))
+            try:  # expand_compact leaves long keys as they are
+                return BlockTranslation.model_validate(expand_compact(obj))
             except ValidationError as exc:
                 compact_error = compact_error or exc
         if compact_error is not None:
