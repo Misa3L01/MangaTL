@@ -19,10 +19,11 @@ import time
 from pathlib import Path
 
 from mangatl import config
-from mangatl.config import Settings, load_settings
+from mangatl.config import Settings, find_project_root, load_settings
 from mangatl.runtime_env import apply_runtime_env
 
-EVALS = Path(__file__).resolve().parents[1] / "output" / "evals"
+# The project root (MANGATL_ROOT), so runs from a git worktree land in the same folder.
+EVALS = find_project_root() / "output" / "evals"
 _OFFLOADED = re.compile(r"offloaded (\d+)/(\d+) layers to GPU")
 
 
@@ -68,6 +69,11 @@ def run(args: argparse.Namespace) -> None:
 
     runtime = OllamaRuntime(settings)
     with runtime.running():
+        # Load the model before timing: the first read of the weights from disk (30-120 s
+        # for the 9B) would otherwise weigh on whichever variant runs first.
+        load_start = time.perf_counter()
+        runtime.chat(model, "Hola", num_predict=1)
+        load_seconds = time.perf_counter() - load_start
         translator = OllamaTranslator(settings)
         start = time.perf_counter()
         stats = translate_chapter(
@@ -92,6 +98,7 @@ def run(args: argparse.Namespace) -> None:
         "overrides": overrides,
         "pages": [p.number for p in project.pages],
         "seconds": round(seconds, 1),
+        "load_seconds": round(load_seconds, 1),
         "seconds_per_page": round(seconds / max(1, len(project.pages)), 1),
         "tokens_per_second": round(stats.tokens_per_second, 1),
         "requests": stats.requests,
