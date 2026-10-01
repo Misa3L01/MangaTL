@@ -208,6 +208,32 @@ class Settings(BaseSettings):
         return path if path.is_absolute() else (self.root / path).resolve()
 
 
+def apply_overrides(settings: Settings, overrides: list[str]) -> Settings:
+    """Copy of `settings` with dotted `key=value` overrides (values parsed as TOML literals;
+    bare words are strings). Raises ValueError on malformed items or unknown keys."""
+    import tomllib
+
+    data = settings.model_dump()
+    for item in overrides:
+        key, sep, raw = item.partition("=")
+        if not sep:
+            raise ValueError(f"Se esperaba CLAVE=VALOR: {item}")
+        try:
+            value = tomllib.loads(f"v = {raw}")["v"]
+        except tomllib.TOMLDecodeError:
+            value = raw  # e.g. translator.ollama.model=qwen3.5:4b
+        node = data
+        *parents, leaf = key.strip().split(".")
+        for part in parents:
+            if not isinstance(node.get(part), dict):
+                raise ValueError(f"Clave desconocida: {key}")
+            node = node[part]
+        if leaf not in node:
+            raise ValueError(f"Clave desconocida: {key}")
+        node[leaf] = value
+    return Settings.model_validate(data)
+
+
 def default_config_path(root: Path | None = None) -> Path:
     env_path = os.environ.get("MANGATL_CONFIG")
     if env_path:

@@ -16,9 +16,9 @@ import argparse
 import json
 import re
 import time
-import tomllib
 from pathlib import Path
 
+from mangatl import config
 from mangatl.config import Settings, load_settings
 from mangatl.runtime_env import apply_runtime_env
 
@@ -27,26 +27,11 @@ _OFFLOADED = re.compile(r"offloaded (\d+)/(\d+) layers to GPU")
 
 
 def apply_overrides(settings: Settings, overrides: list[str]) -> Settings:
-    """Return a copy of `settings` with dotted `key=value` overrides (values parsed as TOML)."""
-    data = settings.model_dump()
-    for item in overrides:
-        key, sep, raw = item.partition("=")
-        if not sep:
-            raise SystemExit(f"--set necesita CLAVE=VALOR: {item}")
-        try:
-            value = tomllib.loads(f"v = {raw}")["v"]
-        except tomllib.TOMLDecodeError:
-            value = raw  # bare strings: --set translator.ollama.model=qwen3.5:4b
-        node = data
-        *parents, leaf = key.strip().split(".")
-        for part in parents:
-            if not isinstance(node.get(part), dict):
-                raise SystemExit(f"Clave desconocida: {key}")
-            node = node[part]
-        if leaf not in node:
-            raise SystemExit(f"Clave desconocida: {key}")
-        node[leaf] = value
-    return Settings.model_validate(data)
+    """`config.apply_overrides` that exits with the message (command-line use)."""
+    try:
+        return config.apply_overrides(settings, overrides)
+    except ValueError as exc:
+        raise SystemExit(f"--set: {exc}") from exc
 
 
 def gpu_layers(server_log: str) -> str | None:
