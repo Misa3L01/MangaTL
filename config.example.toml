@@ -1,0 +1,99 @@
+# MangaTL - configuración.
+# `mangatl setup` copia este archivo a config.toml (ignorado por git) si no existe.
+# Edita config.toml, no este archivo. Las rutas relativas son relativas a la raíz del proyecto.
+# Cualquier valor puede sobrescribirse con variables de entorno MANGATL_<SECCION>__<CLAVE>,
+# p. ej.  $env:MANGATL_TRANSLATOR__OLLAMA__MODEL = "translategemma:4b"
+
+[paths]
+models_dir = "models"
+tmp_dir = "tmp"
+logs_dir = "logs"
+series_dir = "series"        # glosarios y resúmenes por serie
+input_dir = "input"          # deja aquí tus capítulos (fuera de git)
+output_dir = "output"
+fonts_dir = "assets/fonts"
+
+[gpu]
+device = "cuda"              # "cuda" o "cpu"
+warn_free_vram_mb = 4000     # avisa si hay menos VRAM libre antes de cargar el LLM
+
+[detection]
+model_repo = "ogkalu/comic-text-and-bubble-detector"
+model_revision = "16e8a622f91fabc6b5b65c96d32d1183f8843546"
+threshold = 0.3              # corte bruto del detector
+bubble_threshold = 0.5       # confianza mínima para aceptar un globo
+text_threshold = 0.45        # confianza mínima para aceptar un bloque de texto
+panel_order = true           # orden de lectura por viñetas (si no hay viñetas, por filas)
+
+[ocr]
+ja_model_repo = "kha-white/manga-ocr-base"
+ja_model_revision = "aa6573bd10b0d446cbf622e29c3e084914df9741"
+batch_size = 16
+min_confidence = 0.5         # por debajo, la región queda "a revisar"
+
+[inpaint]
+border_protect_px = 3        # píxeles intocables junto al borde interior del globo
+text_box_grow_px = 6         # margen alrededor del texto detectado al buscar la tinta
+text_contrast = 30           # cuánto más oscura que el fondo debe ser la tinta
+text_dilate_px = 3           # dilatación de la máscara (bordes suavizados de las letras)
+min_coverage = 0.6           # si el relleno alcanza menos tinta que esto, se usa LaMa
+use_lama = true              # LaMa para texto sobre dibujo/tramas y letras que cruzan el borde
+lama_url = "https://github.com/Sanster/models/releases/download/AnimeMangaInpainting/anime-manga-big-lama.pt"
+lama_file = "models/lama/anime-manga-big-lama.pt"
+lama_max_side = 1024         # lado máximo del recorte que procesa LaMa (menos = menos VRAM)
+
+[translator]
+backend = "ollama"           # "ollama" (local) o "manual" (chat de claude.ai)
+target_variant = "es-419"    # "es-419" | "es-MX" | "es-ES" | "es-AR"
+honorifics = "keep"          # "keep" | "adapt" | "mixed"
+sfx_mode = "annotate"        # "ignore" | "annotate" | "replace"
+pages_per_block = 4          # páginas por petición al LLM (3-5 recomendado)
+previous_lines = 6           # líneas del bloque anterior que se repiten como contexto
+max_retries = 2              # reintentos si el JSON es inválido o faltan regiones
+manual_part_chars = 20000    # tamaño máximo de cada parte del prompt manual
+pivot_english = false        # traducir en dos pasos: japonés -> inglés -> español (el doble de lento)
+
+[translator.ollama]
+host = "http://127.0.0.1:11434"
+model = "qwen3.5:9b"         # recomendado; rápido: "qwen3.5:4b" (o --model en la CLI)
+num_ctx = 16384
+temperature = 0.3
+think = false                # modo "razonamiento": más lento, apagado por defecto
+auto_start = true            # MangaTL arranca y detiene Ollama automáticamente
+startup_timeout_s = 60
+install_dir = ".local/ollama"
+version = "v0.34.4"
+models_dir = "models/ollama"
+flash_attention = true
+kv_cache_type = "q8_0"       # "f16" | "q8_0" | "q4_0" (menos VRAM para el contexto)
+
+# Fuente por estilo de texto. Deben incluir á é í ó ú ü ñ ¿ ¡ (mangatl setup lo verifica).
+# Para usar Anime Ace u otra fuente propia, ver README → "Cambiar la fuente".
+[typesetting.fonts]
+normal = "assets/fonts/ComicNeue-Bold.ttf"
+shout = "assets/fonts/Bangers-Regular.ttf"
+whisper = "assets/fonts/ComicNeue-Italic.ttf"
+thought = "assets/fonts/ComicNeue-BoldItalic.ttf"
+narration = "assets/fonts/ComicNeue-Regular.ttf"
+sfx = "assets/fonts/Bangers-Regular.ttf"
+
+[typesetting]
+reference_page_height = 1600 # los tamaños de fuente se dan para esta altura de página
+min_font_px = 15
+base_font_px = 22            # para estimar cuántos caracteres caben en cada globo
+max_font_px = 32
+line_spacing = 1.12
+margin_ratio = 0.08          # margen interior, fracción del lado corto del globo
+page_size_spread = 1.2       # ningún globo supera 1,2 x la mediana de tamaño de su página
+hyphenate = true             # división silábica en español (solo cuando hace falta)
+text_color = "#000000"
+stroke_ratio = 0.12          # contorno blanco del texto rotulado sobre el dibujo
+
+[export]
+formats = ["cbz", "pdf"]     # además de los PNG por página (siempre)
+
+[pipeline]
+isolate_vision = true        # detección + OCR en un proceso aparte (libera toda la VRAM)
+
+[setup]
+min_free_disk_gb = 3.0       # ninguna descarga puede dejar menos espacio libre que esto

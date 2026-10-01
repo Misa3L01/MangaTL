@@ -1,0 +1,50 @@
+# Herramientas y entorno local (uv, Python, Ollama, caches)
+.venv/
+.local/
+tmp/
+logs/
+
+# Pesos de modelos
+models/
+
+# Configuracion local y secretos
+.env
+config.toml
+
+# Capitulos de manga y salidas
+input/
+output/
+# Glosarios y resumenes por serie (datos del usuario)
+series/
+*.cbz
+*.cbr
+*.cb7
+*.zip
+*.pdf
+*.mangatl.json
+!tests/fixtures/**
+
+# Fuentes del usuario con licencia no redistribuible (p. ej. Anime Ace)
+assets/fonts/user/
+
+# Python
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node (Fase 3)
+node_modules/
+web/dist/
+
+# Editor / SO
+.vscode/*
+!.vscode/settings.json
+.idea/
+Thumbs.db
+desktop.ini
