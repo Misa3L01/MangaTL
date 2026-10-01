@@ -68,6 +68,18 @@ flash_attention = true
 kv_cache_type = "q8_0"       # "f16" | "q8_0" | "q4_0" (menos VRAM para el contexto)
 recover_repeat_loops = false # si el modelo entra en bucle ("¡¡¡¡…"), reintentar y partir el bloque en vez de abortar
 
+# Opcional: `mangatl setup` crea el modelo desde un GGUF de Hugging Face en vez de bajarlo
+# de Ollama. El 9B "solo texto" no carga el codificador de visión (~1,3 GB de VRAM que
+# MangaTL no usa), así que entran más capas en la GPU. Para usarlo, pon
+# model = "qwen3.5-texto:9b" arriba y descomenta estas líneas:
+# [translator.ollama.gguf]
+# repo = "unsloth/Qwen3.5-9B-GGUF"
+# file = "Qwen3.5-9B-Q4_K_M.gguf"
+# revision = "3885219b6810b007914f3a7950a8d1b469d598a5"
+# renderer = "qwen3.5"
+# parser = "qwen3.5"
+# parameters = { presence_penalty = 1.5, temperature = 1, top_k = 20, top_p = 0.95 }
+
 # Fuente por estilo de texto. Deben incluir á é í ó ú ü ñ ¿ ¡ (mangatl setup lo verifica).
 # Para usar Anime Ace u otra fuente propia, ver README → "Cambiar la fuente".
 [typesetting.fonts]
