@@ -19,7 +19,7 @@ from mangatl.detection.base import RawDetection
 from mangatl.models import BBox, RegionType
 
 Box = tuple[int, int, int, int]
-MIN_AREA_PX = 20  # smaller bright specks are glyph counters or screentone, not bubble areas
+STRIP_SPAN = 0.5  # an area joined to the bubble crosses at least half of it (see _strips)
 
 
 @dataclass
@@ -138,30 +138,41 @@ def text_areas(
     bright = gray_crop > max(100.0, bg_level - 30)
     kernel = np.ones((3, 3), np.uint8)
     core = cv2.erode(bright.astype(np.uint8), kernel)
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(core, connectivity=4)
+    n, labels = cv2.connectedComponents(core, connectivity=4)
     if n <= 1:
         return np.zeros_like(bright)
     edge = np.unique(np.concatenate([labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]]))
     touching = np.bincount(labels[near], minlength=n)
-    keep = [
-        i
-        for i in range(1, n)
-        if i not in edge and touching[i] > 0 and stats[i, cv2.CC_STAT_AREA] >= MIN_AREA_PX
-    ]
+    keep = [i for i in range(1, n) if i not in edge and touching[i] > 0]
     if not keep:
         return np.zeros_like(bright)
     areas = cv2.dilate(np.isin(labels, keep).astype(np.uint8), kernel).astype(bool) & bright
     return _fill_holes(areas)
 
 
-def _bodies(mask: np.ndarray) -> np.ndarray:
-    """`_main_body` of every separate area of `mask` (areas split by a line of text)."""
+def _strips(mask: np.ndarray, near: np.ndarray, frame: np.ndarray) -> np.ndarray:
+    """Pieces of `mask` that run across the container next to its text.
+
+    These are the areas a line of text splits off (or that the opening in `_main_body`
+    shaved off when they hang from the main area by a narrow gap). Letter counters are too
+    small to cross half the container; artwork or a neighboring box reaches `frame` (the
+    border of the detected container box), which a closed bubble's inside never does.
+    """
+    h, w = mask.shape
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=4)
-    out = np.zeros(mask.shape, bool)
-    for i in range(1, n):
-        if stats[i, cv2.CC_STAT_AREA] >= MIN_AREA_PX:
-            out |= _main_body(labels == i)
-    return out
+    edge = np.unique(labels[frame])
+    touching = np.bincount(labels[near], minlength=n)
+    keep = [
+        i
+        for i in range(1, n)
+        if i not in edge
+        and touching[i] > 0
+        and (
+            stats[i, cv2.CC_STAT_WIDTH] >= STRIP_SPAN * w
+            or stats[i, cv2.CC_STAT_HEIGHT] >= STRIP_SPAN * h
+        )
+    ]
+    return np.isin(labels, keep)
 
 
 def _main_body(mask: np.ndarray) -> np.ndarray:
@@ -405,21 +416,24 @@ def build_regions(
             # they fall outside the interior. For (nearly) convex containers - boxes, ovals -
             # the convex hull recovers them while its eroded edge still spares the outline.
             # Spiky shout bubbles keep the plain interior: their hull covers artwork.
-            area = d.interior
-            join = inpaint_cfg.join_text_areas
-            if join:
-                gray_crop = gray[y0:y1, x0:x1]
-                area = area | text_areas(
-                    gray_crop, d.crop, d.text_boxes, inpaint_cfg.text_box_grow_px
-                )
-            core = _bodies(area) if join else _main_body(d.interior)
-            hull = _convex_hull(core, every_part=join)
+            core = _main_body(d.interior)
             body = core
+            # Areas split off by a line of text that touches the outline (inpaint.
+            # join_text_areas): their glyphs and the dividing line are cleaned too. Never in
+            # open containers: their inside was clipped and reaches the page around them.
+            join = inpaint_cfg.join_text_areas and "contorno abierto" not in d.notes
             if join:
-                # The line of text that splits the areas counts as part of the bubble.
+                grow = inpaint_cfg.text_box_grow_px
+                near = _box_mask(core.shape, d.crop, d.text_boxes, grow)
+                frame = ~_box_mask(core.shape, d.crop, [d.container], -2)
+                extra = d.interior | text_areas(gray[y0:y1, x0:x1], d.crop, d.text_boxes, grow)
+                core = core | _strips(extra & ~core, near, frame)
+            hull = _convex_hull(core, every_part=join)
+            if join:
+                # The line of text between the joined areas counts as part of the bubble.
                 body = core | (_box_mask(core.shape, d.crop, d.text_boxes, 0) & hull)
             solidity = body.sum() / max(1, hull.sum())
-            clean_area = hull if solidity > 0.92 else area
+            clean_area = hull if solidity > 0.92 else d.interior
             d.text_mask, _, _, _ = text_pixels(
                 gray[y0:y1, x0:x1], clean_area, d.text_boxes, d.crop, inpaint_cfg, True
             )

@@ -87,6 +87,24 @@ def test_join_text_areas_cleans_text_split_off_by_a_line_touching_the_outline() 
     assert not after[98:103, 148:453].any()
 
 
+def test_join_text_areas_never_touches_open_outlines() -> None:
+    page = np.full((600, 600), 255, np.uint8)  # white page around the box
+    cv2.ellipse(page, CENTER, AXES, 0, 0, 360, 0, 3)
+    page[250:350, 145:160] = 255  # gap in the outline: the inside reaches the page
+    for x in (250, 300, 350):
+        for y in range(200, 400, 30):
+            cv2.rectangle(page, (x - 10, y), (x + 10, y + 18), 0, -1)
+    dets = [
+        RawDetection("bubble", (150, 80, 450, 520), 0.97),
+        RawDetection("text_bubble", (230, 195, 370, 423), 0.95),
+    ]
+    [plain] = build_regions(page, dets, DetectionConfig(), InpaintConfig())
+    [joined] = build_regions(page, dets, DetectionConfig(), InpaintConfig(join_text_areas=True))
+    assert "contorno abierto" in joined.notes
+    # Open containers reach the page around them: the option leaves them exactly as before.
+    assert np.array_equal(text_mask_on_page(plain), text_mask_on_page(joined))
+
+
 def test_interior_follows_the_ellipse_and_text_mask_spares_the_outline() -> None:
     page, dets = bubble_page()
     [draft] = build_regions(page, dets, DetectionConfig(), InpaintConfig())
