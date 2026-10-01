@@ -6,14 +6,76 @@ from pathlib import Path
 import httpx
 import pytest
 
-from mangatl.config import Settings
+from mangatl.config import GgufImport, Settings
 from mangatl.ollama_runtime import (
     OllamaError,
     OllamaRuntime,
     cuda_dir_to_prune,
+    modelfile_text,
     parse_compute_devices,
     split_model_name,
 )
+
+TEXT_ONLY = GgufImport(
+    repo="unsloth/Qwen3.5-9B-GGUF",
+    file="Qwen3.5-9B-Q4_K_M.gguf",
+    renderer="qwen3.5",
+    parser="qwen3.5",
+    parameters={"presence_penalty": 1.5, "top_k": 20},
+)
+
+
+def test_modelfile_keeps_the_family_renderer_and_parameters() -> None:
+    text = modelfile_text(Path("R:/models/gguf/Qwen3.5-9B-Q4_K_M.gguf"), TEXT_ONLY)
+    assert text.splitlines() == [
+        "FROM R:/models/gguf/Qwen3.5-9B-Q4_K_M.gguf",
+        "RENDERER qwen3.5",
+        "PARSER qwen3.5",
+        "PARAMETER presence_penalty 1.5",
+        "PARAMETER top_k 20",
+    ]
+
+
+def test_create_from_gguf_runs_ollama_create_and_cleans_up(
+    settings: Settings, monkeypatch, tmp_path: Path
+) -> None:
+    import subprocess
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        assert Path(args[-1]).read_text(encoding="utf-8").startswith("FROM ")
+        return subprocess.CompletedProcess(args, 0, "success", "")
+
+    monkeypatch.setattr("mangatl.ollama_runtime.subprocess.run", fake_run)
+    rt = OllamaRuntime(settings)
+    rt.create_from_gguf("qwen3.5-texto:9b", tmp_path / "m.gguf", TEXT_ONLY)
+    assert calls[0][1:4] == ["create", "qwen3.5-texto:9b", "-f"]
+    assert not Path(calls[0][-1]).exists()  # the Modelfile is removed
+
+    def failing(args, **kwargs):
+        return subprocess.CompletedProcess(args, 1, "", "error: unsupported architecture")
+
+    monkeypatch.setattr("mangatl.ollama_runtime.subprocess.run", failing)
+    with pytest.raises(OllamaError, match="unsupported architecture"):
+        rt.create_from_gguf("x:1", tmp_path / "m.gguf", TEXT_ONLY)
+
+
+def test_gguf_section_is_read_from_toml(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[translator.ollama]\nmodel = "qwen3.5-texto:9b"\n'
+        '[translator.ollama.gguf]\nrepo = "unsloth/Qwen3.5-9B-GGUF"\n'
+        'file = "Qwen3.5-9B-Q4_K_M.gguf"\nparameters = { top_k = 20 }\n',
+        encoding="utf-8",
+    )
+    from mangatl.config import load_settings
+
+    gguf = load_settings(config).translator.ollama.gguf
+    assert gguf is not None and gguf.file == "Qwen3.5-9B-Q4_K_M.gguf"
+    assert gguf.parameters == {"top_k": 20}
+
 
 SERVER_LOG = """\
 time=2026-09-25T15:00:00.000-06:00 level=INFO source=routes.go:1500 msg="Listening on 127.0.0.1:11434 (version 0.34.4)"

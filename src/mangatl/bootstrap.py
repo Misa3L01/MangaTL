@@ -28,7 +28,7 @@ from rich.progress import (
 from rich.table import Table
 
 from mangatl import gpu
-from mangatl.config import Settings
+from mangatl.config import GgufImport, Settings
 from mangatl.disk import InsufficientSpaceError, check_space, fmt_size, free_bytes
 from mangatl.fonts import OPTIONAL_CHARS, font_family_name, missing_glyphs
 from mangatl.ollama_runtime import OllamaError, OllamaRuntime
@@ -481,10 +481,13 @@ class SetupRunner:
             if self.check_only or self.skip_llm:
                 self._add(f"LLM {cfg.model}", "warn", "No descargado")
                 return
-            size = rt.remote_model_size(cfg.model) or int(3.5 * 2**30)
-            self._announce_download(f"LLM {cfg.model}", size)
-            with download_progress(self.console, cfg.model) as progress:
-                rt.pull(cfg.model, progress)
+            if cfg.gguf is not None:
+                self._import_gguf(rt, cfg.model, cfg.gguf)
+            else:
+                size = rt.remote_model_size(cfg.model) or int(3.5 * 2**30)
+                self._announce_download(f"LLM {cfg.model}", size)
+                with download_progress(self.console, cfg.model) as progress:
+                    rt.pull(cfg.model, progress)
         model_info = next((m for m in rt.list_models() if m.get("name") == cfg.model), {"size": 0})
         self._add(f"LLM {cfg.model}", "ok", f"{fmt_size(model_info['size'])} · {rt.models_dir}")
 
@@ -506,6 +509,35 @@ class SetupRunner:
             f"«{answer[:120]}» · {tps:.0f} tokens/s · {total_s:.1f} s en total "
             f"(num_ctx={cfg.num_ctx}){placement}",
         )
+
+    def _import_gguf(self, rt: OllamaRuntime, name: str, spec: GgufImport) -> None:
+        """Create `name` in Ollama from a GGUF: models/gguf/<file> if present, else downloaded
+        to tmp/ and deleted once Ollama has copied it into its blob store."""
+        from huggingface_hub import HfApi, hf_hub_download
+
+        local = self.settings.resolve(self.settings.paths.models_dir) / "gguf" / spec.file
+        download_dir = None
+        if local.is_file():
+            check_space(self.settings.root, local.stat().st_size, self.min_free_gb)
+        else:
+            info = HfApi().model_info(spec.repo, revision=spec.revision, files_metadata=True)
+            size = next((s.size for s in info.siblings or [] if s.rfilename == spec.file), 0)
+            if not size:
+                raise OllamaError(f"{spec.file} no está en {spec.repo}@{spec.revision}")
+            # Peak: the download plus Ollama's copy; the download is deleted afterwards.
+            self._announce_download(f"GGUF {spec.file}", size, peak=2 * size, final=size)
+            download_dir = rt.tmp_dir / "gguf"
+            local = Path(
+                hf_hub_download(
+                    spec.repo, spec.file, revision=spec.revision, local_dir=download_dir
+                )
+            )
+        try:
+            with self.console.status(f"Creando {name} en Ollama desde {local.name}..."):
+                rt.create_from_gguf(name, local, spec)
+        finally:
+            if download_dir is not None:
+                shutil.rmtree(download_dir, ignore_errors=True)
 
     def _fonts(self) -> None:
         fonts = self.settings.typesetting.fonts

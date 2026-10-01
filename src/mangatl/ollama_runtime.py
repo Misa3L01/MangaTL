@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from mangatl.config import Settings
+from mangatl.config import GgufImport, Settings
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +79,17 @@ def split_model_name(model: str) -> tuple[str, str, str]:
     name, _, tag = model.partition(":")
     namespace, _, short = name.rpartition("/")
     return namespace or "library", short, tag or "latest"
+
+
+def modelfile_text(gguf_path: Path, spec: GgufImport) -> str:
+    """Modelfile for `ollama create` from a GGUF, keeping the family's renderer and params."""
+    lines = [f"FROM {gguf_path.as_posix()}"]
+    if spec.renderer:
+        lines.append(f"RENDERER {spec.renderer}")
+    if spec.parser:
+        lines.append(f"PARSER {spec.parser}")
+    lines += [f"PARAMETER {key} {value}" for key, value in spec.parameters.items()]
+    return "\n".join(lines) + "\n"
 
 
 def cuda_dir_to_prune(driver_major: int | None) -> str | None:
@@ -304,6 +315,26 @@ class OllamaRuntime:
                     raise OllamaError(f"Error al descargar {model}: {event['error']}")
                 if progress and "total" in event:
                     progress(int(event.get("completed", 0)), int(event["total"]))
+
+    def create_from_gguf(self, name: str, gguf_path: Path, spec: GgufImport) -> None:
+        """`ollama create` from a local GGUF (the server copies it into its blob store)."""
+        self.tmp_dir.mkdir(parents=True, exist_ok=True)
+        modelfile = self.tmp_dir / "Modelfile"
+        modelfile.write_text(modelfile_text(gguf_path, spec), encoding="utf-8")
+        try:
+            result = subprocess.run(
+                [str(self.exe_path), "create", name, "-f", str(modelfile)],
+                env=self.server_env(),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+        finally:
+            modelfile.unlink(missing_ok=True)
+        if result.returncode != 0:
+            raise OllamaError(f"No se pudo crear {name}: {(result.stderr or result.stdout)[-500:]}")
 
     def delete(self, model: str) -> None:
         resp = self._client.request("DELETE", f"{self.base_url}/api/delete", json={"model": model})

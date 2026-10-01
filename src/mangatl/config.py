@@ -91,6 +91,18 @@ class InpaintConfig(BaseModel):
     lama_max_side: int = Field(1024, ge=256)
 
 
+class GgufImport(BaseModel):
+    """Build the Ollama model from a GGUF on Hugging Face instead of the Ollama library."""
+
+    repo: str
+    file: str
+    revision: str = "main"
+    # Ollama's built-in prompt renderer/parser for the family (e.g. "qwen3.5").
+    renderer: str | None = None
+    parser: str | None = None
+    parameters: dict[str, float | int] = Field(default_factory=dict)
+
+
 class OllamaConfig(BaseModel):
     host: str = "http://127.0.0.1:11434"
     # Chosen after the Phase 2 comparison: clearly more accurate than qwen3.5:4b (names,
@@ -111,6 +123,10 @@ class OllamaConfig(BaseModel):
     # When Ollama aborts an answer because the model loops ("¡¡¡¡…", HTTP 500 "token repeat
     # limit"): retry with another seed, then split the block, instead of failing the chapter.
     recover_repeat_loops: bool = False
+    # Optional: `mangatl setup` creates `model` from this GGUF instead of pulling it. With
+    # the text-only Qwen3.5 9B the vision encoder (~1.3 GB of VRAM) is not loaded, so more
+    # layers fit on a 6 GB GPU (23 of 33 instead of 18 of 34).
+    gguf: GgufImport | None = None
 
 
 class TranslatorConfig(BaseModel):
