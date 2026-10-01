@@ -126,6 +126,9 @@ class OllamaConfig(BaseModel):
     # When Ollama aborts an answer because the model loops ("¡¡¡¡…", HTTP 500 "token repeat
     # limit"): retry with another seed, then split the block, instead of failing the chapter.
     recover_repeat_loops: bool = False
+    # Extra Ollama options for every translation request, e.g. {num_gpu = 27} (layers on the
+    # GPU) or {presence_penalty = 0.0}. Empty: the model's own defaults.
+    extra_options: dict[str, float | int] = Field(default_factory=dict)
     # Optional: `mangatl setup` creates `model` from this GGUF instead of pulling it. With
     # the text-only Qwen3.5 9B the vision encoder (~1.3 GB of VRAM) is not loaded, so more
     # layers fit on a 6 GB GPU (23 of 33 instead of 18 of 34).

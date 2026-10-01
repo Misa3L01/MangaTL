@@ -210,6 +210,16 @@ def test_persistent_loop_splits_the_block_and_isolates_the_region(
     assert sorted(r.id for r in result.regions) == ["P001-B01", "P001-B02"]
 
 
+def test_ollama_extra_options_reach_the_request(settings: Settings, small_project: Project) -> None:
+    settings.translator.ollama.extra_options = {"num_gpu": 22, "presence_penalty": 0.0}
+    ctx = ctx_for(small_project)
+    tr, reqs = make_ollama(settings, [ollama_reply(fake_answer(ctx).model_dump_json())])
+    tr.translate_block("sys", ctx)
+    options = reqs[0]["options"]
+    assert options["num_gpu"] == 22 and options["presence_penalty"] == 0.0
+    assert options["num_ctx"] == settings.translator.ollama.num_ctx
+
+
 def test_ollama_retries_invalid_json_with_the_error(
     settings: Settings, small_project: Project
 ) -> None:

@@ -106,6 +106,7 @@ class OllamaTranslator(Translator):
             "think": self.cfg.think,
             "keep_alive": "15m",
             "options": {
+                **self.cfg.extra_options,
                 "num_ctx": self.cfg.num_ctx,
                 "temperature": self.cfg.temperature,
                 **(options or {}),
