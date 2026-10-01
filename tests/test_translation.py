@@ -210,6 +210,41 @@ def test_persistent_loop_splits_the_block_and_isolates_the_region(
     assert sorted(r.id for r in result.regions) == ["P001-B01", "P001-B02"]
 
 
+def test_ollama_extra_options_reach_the_request(settings: Settings, small_project: Project) -> None:
+    settings.translator.ollama.extra_options = {"num_gpu": 22, "presence_penalty": 0.0}
+    ctx = ctx_for(small_project)
+    tr, reqs = make_ollama(settings, [ollama_reply(fake_answer(ctx).model_dump_json())])
+    tr.translate_block("sys", ctx)
+    options = reqs[0]["options"]
+    assert options["num_gpu"] == 22 and options["presence_penalty"] == 0.0
+    assert options["num_ctx"] == settings.translator.ollama.num_ctx
+
+
+def test_forced_gpu_layers_fall_back_when_vram_runs_out(
+    settings: Settings, small_project: Project
+) -> None:
+    settings.translator.ollama.extra_options = {"num_gpu": 27}
+    ctx = ctx_for(small_project)
+    oom = httpx.Response(
+        500, json={"error": "llama runner process has terminated: cudaMalloc failed: out of memory"}
+    )
+    reply = ollama_reply(fake_answer(ctx).model_dump_json())
+    tr, reqs = make_ollama(settings, [oom, reply, ollama_reply(fake_answer(ctx).model_dump_json())])
+    assert len(tr.translate_block("sys", ctx).regions) == 3
+    assert reqs[0]["options"]["num_gpu"] == 27 and "num_gpu" not in reqs[1]["options"]
+    tr.translate_block("sys", ctx)  # later requests keep the automatic placement
+    assert "num_gpu" not in reqs[2]["options"]
+
+
+def test_out_of_memory_without_forced_layers_is_an_error(
+    settings: Settings, small_project: Project
+) -> None:
+    oom = httpx.Response(500, json={"error": "cudaMalloc failed: out of memory"})
+    tr, _ = make_ollama(settings, [oom])
+    with pytest.raises(TranslationError, match="out of memory"):
+        tr.translate_block("sys", ctx_for(small_project))
+
+
 def test_ollama_retries_invalid_json_with_the_error(
     settings: Settings, small_project: Project
 ) -> None:
