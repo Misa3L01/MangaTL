@@ -141,7 +141,7 @@ def run(args: argparse.Namespace) -> None:
 
 def _chapter_extras(settings: Settings, paths: object) -> dict[str, object]:
     """Optional translate_chapter arguments that depend on experimental settings."""
-    return {}
+    return {"clear_speakers": settings.translator.clear_speaker_rules}
 
 
 def report(args: argparse.Namespace) -> None:

@@ -150,6 +150,7 @@ def translate_chapter(
     on_block: Callable[[int, int], None] | None = None,
     pivot: bool = False,
     previous_chapters: list[str] | None = None,
+    clear_speakers: bool = False,
 ) -> TranslationStats:
     """Translate every page of `project` in context-aware blocks (mutates the project).
 
@@ -157,7 +158,7 @@ def translate_chapter(
     sees the Japanese original). Roughly doubles the translation time.
     """
     meta = project.meta
-    system = system_prompt(meta, pivot=pivot)
+    system = system_prompt(meta, pivot=pivot, clear_speakers=clear_speakers)
     system_en = pivot_english_prompt() if pivot else ""
     blocks = plan_blocks(project.pages, pages_per_block)
     stats = translator.stats

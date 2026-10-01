@@ -124,6 +124,9 @@ class TranslatorConfig(BaseModel):
     manual_part_chars: int = Field(20000, ge=2000)
     # Two passes per block: Japanese -> English draft -> Spanish (about twice as slow).
     pivot_english: bool = False
+    # Experimental: stricter speaker rules in the prompt (no invented names, "narración" for
+    # caption boxes) and name examples that cannot be taken for characters.
+    clear_speaker_rules: bool = False
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
 
 
