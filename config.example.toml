@@ -66,6 +66,7 @@ version = "v0.34.4"
 models_dir = "models/ollama"
 flash_attention = true
 kv_cache_type = "q8_0"       # "f16" | "q8_0" | "q4_0" (menos VRAM para el contexto)
+recover_repeat_loops = false # si el modelo entra en bucle ("¡¡¡¡…"), reintentar y partir el bloque en vez de abortar
 
 # Fuente por estilo de texto. Deben incluir á é í ó ú ü ñ ¿ ¡ (mangatl setup lo verifica).
 # Para usar Anime Ace u otra fuente propia, ver README → "Cambiar la fuente".
