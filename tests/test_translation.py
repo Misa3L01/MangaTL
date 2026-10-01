@@ -98,6 +98,18 @@ def test_edited_regions_are_not_retranslated(small_project: Project) -> None:
     assert region.translation == "Mi versión"
 
 
+def test_clear_speaker_rules_only_change_the_speaker_and_name_lines(
+    small_project: Project,
+) -> None:
+    current = system_prompt(small_project.meta)
+    assert "(Saitō, Shūhei, Tōkyō..." in current  # default wording is untouched
+    assert "a character name from context or the glossary" in current
+    clear = system_prompt(small_project.meta, clear_speakers=True)
+    assert "Shūhei" not in clear and "never invent a name" in clear
+    changed = [a for a, b in zip(current.splitlines(), clear.splitlines(), strict=True) if a != b]
+    assert len(changed) == 2
+
+
 def test_prompts_carry_the_style_choices(small_project: Project) -> None:
     system = system_prompt(small_project.meta)
     assert "neutral Latin American Spanish" in system

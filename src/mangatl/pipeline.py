@@ -180,11 +180,14 @@ class Pipeline:
                         on_block=lambda i, n: step(),
                         pivot=tcfg.pivot_english,
                         previous_chapters=previous,
+                        clear_speakers=tcfg.clear_speaker_rules,
                     )
                 # Dry-run the lettering while the model is still loaded: balloons that do not
                 # fit even at the minimum size get one request for a shorter version.
                 overflows = find_overflows(sub, ProjectPaths(project_file), self.settings, pages)
-                shorter = translator.shorten(system_prompt(project.meta), overflows)
+                shorter = translator.shorten(
+                    system_prompt(project.meta, clear_speakers=tcfg.clear_speaker_rules), overflows
+                )
                 for region, _ in overflows:
                     if shorter.get(region.id):
                         region.shorter_alternative = clean_translation(shorter[region.id])

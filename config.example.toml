@@ -52,6 +52,7 @@ previous_lines = 6           # líneas del bloque anterior que se repiten como c
 max_retries = 2              # reintentos si el JSON es inválido o faltan regiones
 manual_part_chars = 20000    # tamaño máximo de cada parte del prompt manual
 pivot_english = false        # traducir en dos pasos: japonés -> inglés -> español (el doble de lento)
+clear_speaker_rules = false  # experimental: reglas más estrictas para el hablante (no inventar nombres)
 
 [translator.ollama]
 host = "http://127.0.0.1:11434"

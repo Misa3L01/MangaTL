@@ -16,7 +16,7 @@ Return ONLY a JSON object with:
 - `regions`: exactly one entry per input `id`, in the same order, with:
   - `id`: the region id.
   - `source_text_corrected`: the original text of THAT region, copied from its `text` (fix evident OCR mistakes). It must match the region with the same `id`: never move text between ids. When one sentence is split across several balloons, translate each balloon's part in its own entry.
-  - `speaker`: who says it (a character name from context or the glossary) or "desconocido".
+  - `speaker`: $speaker_rule
   - `translation`: the final Spanish text to letter in that balloon.
   - `style`: normal | shout | whisper | thought | narration | sfx (shout for yelling, thought for inner monologue, narration for caption boxes).
   - `confidence`: your confidence in the translation (0-1).
@@ -32,7 +32,7 @@ Return ONLY a JSON object with:
 - Cultural references (food, festivals, school system, idioms, wordplay): use a natural Spanish equivalent when one exists; if something important is lost, add a brief `translator_note`.
 - Profanity and slang: same intensity as the original. Do not soften, exaggerate or censor.
 - $sfx_rules
-- Names: keep the original order (family name first if the original does) and Hepburn romanization (Saitō, Shūhei, Tōkyō... or without macrons if the glossary says so). Glossary entries are mandatory.
+- Names: $names_rule
 - Spanish punctuation: always open ¡ and ¿; use the ellipsis character "…"; no spaces before punctuation marks. Japanese marks become Spanish ones (「」 → nothing or quotes, ！ → !, ？ → ?, ・・・ → …).
 - Fit: stay within `max_chars`. If a line cannot fit without losing key information, condense it naturally; as a last resort set `fits_capacity: false` and provide `shorter_alternative`.
 - Very low `ocr_conf` or garbage text: translate your best guess from context, set a low `confidence`, and never invent dialogue that is not there.
