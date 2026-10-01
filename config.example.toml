@@ -54,6 +54,7 @@ max_retries = 2              # reintentos si el JSON es inválido o faltan regio
 manual_part_chars = 20000    # tamaño máximo de cada parte del prompt manual
 pivot_english = false        # traducir en dos pasos: japonés -> inglés -> español (el doble de lento)
 clear_speaker_rules = false  # experimental: reglas más estrictas para el hablante (no inventar nombres)
+compact_output = false       # experimental: respuesta del modelo con claves cortas (menos tokens)
 
 [translator.ollama]
 host = "http://127.0.0.1:11434"

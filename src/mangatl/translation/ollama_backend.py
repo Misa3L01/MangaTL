@@ -43,6 +43,100 @@ def _ollama_schema() -> dict:
 
 
 SCHEMA = _ollama_schema()
+
+# translator.compact_output: same content with 1-3 letter keys and the JSON on one line. Local
+# models emit every key of every region, so long names cost tokens (generation is ~97 % of the
+# translation time on a 6 GB GPU). The source echo is kept: alignment depends on it.
+COMPACT_REGION_KEYS = {
+    "id": "id",
+    "src": "source_text_corrected",
+    "who": "speaker",
+    "es": "translation",
+    "st": "style",
+    "c": "confidence",
+    "alt": "shorter_alternative",
+    "note": "translator_note",
+    "ord": "reading_order",
+}
+COMPACT_GLOSSARY_KEYS = {"src": "source", "es": "target", "cat": "category", "note": "notes"}
+COMPACT_INSTRUCTIONS = """
+# Compact output (mandatory)
+Use these short keys instead of the long names above: `r` = regions; in each region `id`, \
+`src` = source_text_corrected, `who` = speaker, `es` = translation, `st` = style, \
+`c` = confidence, and only when they apply `alt` = shorter_alternative, `note` = \
+translator_note, `ord` = reading_order; `sum` = block_summary; `gl` = new_glossary_entries \
+with `src` = source, `es` = target, `cat` = category, `note` = notes. Write the whole JSON on \
+a single line, with no indentation and no spaces between keys and values."""
+
+
+def _compact_schema() -> dict:
+    region = SCHEMA["properties"]["regions"]["items"]["properties"]
+    glossary = SCHEMA["properties"]["new_glossary_entries"]["items"]["properties"]
+    return {
+        "type": "object",
+        "properties": {
+            "r": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "src": {"type": "string"},
+                        "who": {"type": "string"},
+                        "es": {"type": "string"},
+                        "st": region["style"],
+                        "c": {"type": "number"},
+                        "alt": {"type": "string"},
+                        "note": {"type": "string"},
+                        "ord": {"type": "integer"},
+                    },
+                    "required": ["id", "src", "who", "es", "st", "c"],
+                },
+            },
+            "sum": {"type": "string"},
+            "gl": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "src": {"type": "string"},
+                        "es": {"type": "string"},
+                        "cat": glossary["category"],
+                        "note": {"type": "string"},
+                    },
+                    "required": ["src", "es", "cat"],
+                },
+            },
+        },
+        "required": ["r", "sum", "gl"],
+    }
+
+
+COMPACT_SCHEMA = _compact_schema()
+
+
+def expand_compact(obj: dict) -> dict:
+    """Compact reply -> the regular BlockTranslation shape."""
+    regions = []
+    for item in obj.get("r") or []:
+        if not isinstance(item, dict):
+            continue
+        region = {COMPACT_REGION_KEYS.get(k, k): v for k, v in item.items()}
+        if region.get("shorter_alternative"):
+            region["fits_capacity"] = False
+        regions.append(region)
+    glossary = [
+        {COMPACT_GLOSSARY_KEYS.get(k, k): v for k, v in entry.items()}
+        for entry in obj.get("gl") or []
+        if isinstance(entry, dict)
+    ]
+    return {
+        "regions": regions,
+        "block_summary": obj.get("sum") or "",
+        "new_glossary_entries": glossary,
+    }
+
+
 SHORTEN_SCHEMA = {
     "type": "object",
     "properties": {
@@ -72,8 +166,26 @@ _OUT_OF_MEMORY = re.compile(
 )
 
 
-def parse_block(content: str) -> BlockTranslation:
+def parse_block(content: str, compact: bool = False) -> BlockTranslation:
     """Validate the model reply, tolerating text around the JSON object."""
+    if compact:
+        candidates: list[object] = []
+        with suppress(json.JSONDecodeError):
+            candidates.append(json.loads(content))
+        candidates.extend(extract_json_objects(content))
+        compact_error: ValidationError | None = None
+        for obj in candidates:
+            if not isinstance(obj, dict):
+                continue
+            long_form = "r" not in obj and "regions" in obj  # the model ignored the short keys
+            try:
+                return BlockTranslation.model_validate(obj if long_form else expand_compact(obj))
+            except ValidationError as exc:
+                compact_error = compact_error or exc
+        if compact_error is not None:
+            raise compact_error
+        # Not JSON at all (or the model used the long keys): the regular path below raises
+        # the ValidationError that is fed back to the model.
     try:
         return BlockTranslation.model_validate_json(content)
     except ValidationError as first_error:
@@ -97,6 +209,7 @@ class OllamaTranslator(Translator):
         self._client = client or httpx.Client(timeout=httpx.Timeout(15.0, read=1800.0))
         self.realigned = 0
         self._auto_layers = False  # set when forced GPU layers (num_gpu) ran out of VRAM
+        self.compact = settings.translator.compact_output
 
     # ------------------------------------------------------------------ transport
     def _extra_options(self) -> dict[str, float | int]:
@@ -114,7 +227,7 @@ class OllamaTranslator(Translator):
         payload = {
             "model": self.model,
             "messages": messages,
-            "format": schema or SCHEMA,
+            "format": schema or (COMPACT_SCHEMA if self.compact else SCHEMA),
             "stream": False,
             "think": self.cfg.think,
             "keep_alive": "15m",
@@ -166,6 +279,8 @@ class OllamaTranslator(Translator):
         return data.get("message", {}).get("content", "")
 
     def _ask(self, system: str, user: str) -> BlockTranslation:
+        if self.compact:
+            system += COMPACT_INSTRUCTIONS
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         last_error: Exception | None = None
         options: dict[str, float] = {}
@@ -183,7 +298,7 @@ class OllamaTranslator(Translator):
                 }
                 continue
             try:
-                return parse_block(content)
+                return parse_block(content, self.compact)
             except ValidationError as exc:
                 last_error = exc
                 errors = "; ".join(

@@ -152,6 +152,8 @@ class TranslatorConfig(BaseModel):
     # Experimental: stricter speaker rules in the prompt (no invented names, "narración" for
     # caption boxes) and name examples that cannot be taken for characters.
     clear_speaker_rules: bool = False
+    # Experimental: short JSON keys on one line in the model's answer (fewer output tokens).
+    compact_output: bool = False
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
 
 
