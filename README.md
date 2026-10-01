@@ -278,6 +278,97 @@ Probados con las páginas 61–72 de *Black Jack ni Yoroshiku* (91 regiones), un
 Ningún modelo local identifica bien quién habla sin ver la imagen. Para la mejor calidad, el
 backend `manual` (claude.ai) sigue siendo la opción recomendada.
 
+### Experimentos de optimización (octubre de 2026)
+
+Mismas 12 páginas (61–72, 91 regiones; en 52 se anotó a mano quién habla), una variante por
+vez, con el modelo ya cargado, medidas con `scripts/compare_models.py --set ...`. Todas son
+opciones de `config.toml` **apagadas por defecto**.
+
+| Variante | Tiempo (12 págs.) | s/página | tok/s | Tokens de salida | En GPU | Sin traducir | Hablantes bien / mal | Resultado |
+|---|---|---|---|---|---|---|---|---|
+| Línea base (`qwen3.5:9b`) | 616 s | 51,4 | 10,5 | 6353 | 55 % (18/34 capas) | 0 | 19 / 31 | — |
+| **A1** 9B solo texto (`[translator.ollama.gguf]`) | 511 s | 42,6 | 13,3 | 6617 | 67 % (23/33) | 0 | 19 / 33 | **Adoptado** |
+| **A2** A1 + `extra_options = { num_gpu = 27 }` | 401 s | 33,4 | 17,2 | 6555 | 76 % (27/33) | 0 | 21 / 31 | **Adoptado** |
+| **A3** `compact_output` | 470 s | 39,2 | 9,9 | 4214 | 55 % | 0 | 25 / 20 | **Adoptado** (con `recover_repeat_loops`) |
+| A4 `presence_penalty = 0` | 630 s | 52,5 | 10,5 | 6485 | 55 % | 0 | 19 / 33 | Descartado: sin efecto medible |
+| **A5** `clear_speaker_rules` | 623 s | 51,9 | 10,4 | 6357 | 55 % | 0 | 19 / 8 | **Adoptado** |
+| B `page_images` (la página como imagen) | 738 s | 61,5 | 9,3 | 6482 | 55 % | 0 | 0 / 0 | Descartado |
+| 9B solo texto en 3 bits (`UD-IQ3_XXS`) | 179 s | 14,9 | 35,6 | 6099 | 100 % (33/33) | 0 | 19 / 33 | Descartado: calidad de borrador |
+| **Combinado** A1 + A2 + A3 + A5 + A6 | **274 s** | **22,8** | 17,1 | 4322 | 76 % (27/33) | 0 | 20 / 21 | **Recomendado: 2,25× más rápido** |
+
+- **Por qué el 9B iba al 55 %:** el GGUF de `qwen3.5:9b` en Ollama incluye el codificador de
+  visión y Ollama le reserva ~1,3 GB de VRAM aunque MangaTL nunca manda imágenes. La caché KV
+  no es el problema: el modelo es híbrido (solo 1 de cada 4 capas tiene atención completa) y
+  con `num_ctx = 16384` ocupa 272 MiB; bajar el contexto no libera casi nada.
+- **A1:** el mismo Q4_K_M sin visión (Unsloth, revisión fijada) deja 5 capas más en la GPU.
+  `mangatl setup` lo descarga y crea el modelo `qwen3.5-texto:9b` en Ollama.
+- **A2:** forzar 27 capas deja ~0,6 GB de margen. Si otro programa ocupa VRAM y la carga
+  falla, MangaTL avisa y sigue con el reparto automático de Ollama.
+- **A3:** claves cortas dentro de cada región (`src`, `es`, `who`…) y JSON en una línea: un
+  34 % menos de tokens. La primera versión también acortaba las claves de una sola aparición y
+  el modelo dejó de proponer entradas de glosario; ahora solo se acortan las que se repiten.
+  En las dos corridas con salida compacta el modelo entró una vez en un bucle «¡¡¡¡…»
+  (onomatopeya con OCR basura), así que conviene usarla con `recover_repeat_loops` (A6).
+- **A5:** el prompt usaba «Shūhei» como ejemplo de romanización y el modelo lo copiaba como
+  hablante de 16 globos. Con reglas claras acierta lo mismo pero inventa 4 veces menos; cuando
+  no sabe, dice «desconocido».
+- **A6 `recover_repeat_loops`:** cuando el modelo se queda repitiendo un carácter, Ollama corta
+  con un error 500 y antes eso abortaba el capítulo entero. Ahora se reintenta con otra semilla
+  y, si persiste, el bloque se parte y la región queda «a revisar».
+- **B:** las imágenes llegan al modelo (~740 tokens por página), pero el 9B pasa a responder
+  «desconocido» en todos los hablantes y algunas traducciones empeoran (斉藤英二郎 →
+  «Saitō Hichirō»), con un 20 % más de tiempo.
+- **3 bits:** 3,4× más rápido, pero メス → «¡Kyu!» (el 9B normal dice «¡El bisturí!»), frases
+  sin sentido y ninguna entrada de glosario: no mejora al 4B, que ya es el modo rápido.
+- **Medición:** dos corridas idénticas de la línea base difieren en 51 de 67 traducciones
+  (temperatura 0,3), así que la calidad se juzgó con métricas (hablantes, regiones sin
+  traducir, errores verificables) y no por cantidad de cambios.
+- **No implementados:** un backend con llama.cpp (C), porque Ollama 0.34.4 ya usa llama.cpp
+  por dentro y el GGUF de solo texto más `num_gpu` dan el mismo control; un modelo MoE más grande
+  con expertos en RAM (D), porque `Qwen3.5-35B-A3B` pesa 9,9 GiB incluso en 2 bits y no entra con
+  margen en 16 GB de RAM; y otro modelo de inpainting en 6 GB (E3), porque ninguno supera a LaMa
+  afinado para manga sobre línea y tramas.
+
+Limpieza, medida con `scripts/reclean.py` en el capítulo 2 completo (24 páginas):
+
+| Variante | Japonés | Inglés | Daño fuera del texto | Resultado |
+|---|---|---|---|---|
+| **E1** `inpaint.join_text_areas` | tinta sin limpiar 6593 → 6570 px | 20 747 → 15 221 px (−27 %) | 0 px | **Adoptado** |
+| E2 `inpaint.art_mask = "glyphs"` | área repintada por LaMa −51 % | −55 % | — | Descartado |
+
+- **E1:** una línea de texto que toca el contorno por los dos lados partía el globo y su zona
+  superior no se limpiaba (p. ej. «REGARDLESS», «WRITING AN EXPERIMENTAL» en la edición en
+  inglés). Nunca se aplica a contornos abiertos: la primera versión borraba esos contornos.
+- **E2:** LaMa repinta solo las letras en vez de la caja entera. Mucho mejor en carteles con
+  fondo liso (el cartel del hospital queda blanco en vez de una mancha oscura), pero peor sobre
+  trama o textura: LaMa rellena la silueta de las letras con gris liso y quedan «letras
+  fantasma». Sin una regla fiable para elegir, la caja entera sigue siendo lo más seguro; la
+  rama `exp/e2-mascara` queda para una futura opción por región en el editor.
+
+Configuración recomendada (después, `uv run mangatl setup` crea el modelo de solo texto):
+
+```toml
+[translator]
+compact_output = true
+clear_speaker_rules = true
+
+[translator.ollama]
+model = "qwen3.5-texto:9b"
+recover_repeat_loops = true
+extra_options = { num_gpu = 27 }
+
+[translator.ollama.gguf]
+repo = "unsloth/Qwen3.5-9B-GGUF"
+file = "Qwen3.5-9B-Q4_K_M.gguf"
+revision = "3885219b6810b007914f3a7950a8d1b469d598a5"
+renderer = "qwen3.5"
+parser = "qwen3.5"
+parameters = { presence_penalty = 1.5, temperature = 1, top_k = 20, top_p = 0.95 }
+
+[inpaint]
+join_text_areas = true
+```
+
 ### Rendimiento medido
 
 Capítulo 2 de *Black Jack ni Yoroshiku* (24 páginas de 1414×2000, ~146 regiones) en una
@@ -311,7 +402,8 @@ un minuto.
   rotulan traducidos. Si prefieres conservarlos, márcalos como `skipped` en el proyecto y
   ejecuta `mangatl render`.
 - En cuadros unidos a otro cuadro (contorno abierto), un carácter grande pegado a una esquina
-  puede quedar sin limpiar: se prioriza no borrar nunca el contorno.
+  puede quedar sin limpiar: se prioriza no borrar nunca el contorno. Las líneas de texto que
+  tocan el contorno de un globo cerrado sí se limpian con `inpaint.join_text_areas`.
 - **Orden de lectura:** las viñetas sin borde o que sangran fuera de la página pueden no
   detectarse; en ese caso se usa el orden por filas.
 
@@ -464,6 +556,19 @@ uv run ruff format .     # formato
 El CI de GitHub corre el lint y los tests en Windows sin GPU (sin PyTorch ni modelos) y compila
 el editor web. Los reportes de errores y las sugerencias son bienvenidos en *Issues*.
 
+Para medir cambios sin tocar `config.toml`:
+
+```powershell
+# Traducción de unas páginas ya procesadas, con ajustes solo para esa corrida
+uv run python scripts/compare_models.py run --project output\<proy>\<proy>.mangatl.json `
+    --pages 61-72 --tag prueba --set translator.compact_output=true
+uv run python scripts/compare_models.py report --tags base prueba
+
+# Limpieza de un proyecto con otros ajustes, en otra carpeta (sin detector, OCR ni LLM)
+uv run python scripts/reclean.py --project output\<proy>\<proy>.mangatl.json `
+    --out tmp\limpieza --set inpaint.join_text_areas=true --crops P064-B03
+```
+
 Para publicar con la [CLI de GitHub](https://cli.github.com/) sin instalarla en C:, descomprime
 el `.zip` portable en `.local\gh`: `env.ps1` la agrega al PATH y guarda su configuración en
 `.local\gh\config` (el token queda en el Administrador de credenciales de Windows).
@@ -474,6 +579,9 @@ el `.zip` portable en `.local\gh`: `env.ps1` la agrega al PATH y guarda su confi
 - [x] **Fase 2:** calidad (comparativa de modelos, origen en inglés, LaMa, orden por viñetas,
   glosario y resúmenes por serie, versión corta, PDF).
 - [x] **Fase 3:** editor web local.
+- [x] **Optimización** (opciones, ver [Experimentos de optimización](#experimentos-de-optimización-octubre-de-2026)):
+  traducción 2,25× más rápida con el 9B de solo texto, capas forzadas y salida compacta; menos
+  hablantes inventados; bucles de repetición recuperables; limpieza de globos partidos.
 - [ ] **Fase 4 (opcional):** onomatopeyas en modo `replace`, procesamiento por lotes, exportar el
   texto como subtítulos `.srt`/`.ass`, backend `claude` (API, opcional y de pago) y empaquetado
   como `.exe`.
