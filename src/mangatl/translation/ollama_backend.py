@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from contextlib import suppress
 from dataclasses import replace
 
@@ -66,6 +67,11 @@ class RepetitionLoopError(TranslationError):
     """Ollama aborted the answer: the model kept repeating a token (e.g. '¡¡¡¡…')."""
 
 
+_OUT_OF_MEMORY = re.compile(
+    r"out of memory|cudaMalloc|failed to allocate|insufficient memory|requires more", re.I
+)
+
+
 def parse_block(content: str) -> BlockTranslation:
     """Validate the model reply, tolerating text around the JSON object."""
     try:
@@ -90,8 +96,15 @@ class OllamaTranslator(Translator):
         self.base_url = self.cfg.host.rstrip("/")
         self._client = client or httpx.Client(timeout=httpx.Timeout(15.0, read=1800.0))
         self.realigned = 0
+        self._auto_layers = False  # set when forced GPU layers (num_gpu) ran out of VRAM
 
     # ------------------------------------------------------------------ transport
+    def _extra_options(self) -> dict[str, float | int]:
+        options = dict(self.cfg.extra_options)
+        if self._auto_layers:
+            options.pop("num_gpu", None)
+        return options
+
     def _chat(
         self,
         messages: list[dict[str, str]],
@@ -106,7 +119,7 @@ class OllamaTranslator(Translator):
             "think": self.cfg.think,
             "keep_alive": "15m",
             "options": {
-                **self.cfg.extra_options,
+                **self._extra_options(),
                 "num_ctx": self.cfg.num_ctx,
                 "temperature": self.cfg.temperature,
                 **(options or {}),
@@ -116,6 +129,15 @@ class OllamaTranslator(Translator):
             resp = self._client.post(f"{self.base_url}/api/chat", json=payload)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            if "num_gpu" in payload["options"] and _OUT_OF_MEMORY.search(exc.response.text):
+                # Forced layers no longer fit (another program took VRAM): let Ollama decide.
+                log.warning(
+                    "No hay VRAM para %s capas en la GPU (translator.ollama.extra_options."
+                    "num_gpu): se sigue con el reparto automático de Ollama",
+                    payload["options"]["num_gpu"],
+                )
+                self._auto_layers = True
+                return self._chat(messages, schema, options)
             message = f"Ollama respondió {exc.response.status_code}: {exc.response.text[:300]}"
             if "repeat limit" in exc.response.text:
                 raise RepetitionLoopError(message) from exc
