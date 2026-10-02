@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./models/**)",
+      "Read(./.local/**)",
+      "Read(./.venv/**)",
+      "Read(./input/**)",
+      "Read(./output/**)",
+      "Read(./work/**)",
+      "Read(./tmp/**)",
+      "Read(./logs/**)",
+      "Read(./series/**)",
+      "Read(./uv.lock)",
+      "Read(./web/node_modules/**)",
+      "Read(./web/dist/**)",
+      "Read(./web/package-lock.json)",
+      "Read(./docs/images/**)",
+      "Read(./tests/fixtures/**)",
+      "Read(./assets/fonts/**)",
+      "Read(./**/*.pt)",
+      "Read(./**/*.onnx)",
+      "Read(./**/*.safetensors)",
+      "Read(./**/*.gguf)",
+      "Read(./**/*.png)",
+      "Read(./**/*.webp)",
+      "Read(./**/*.pdf)",
+      "Read(./**/*.cbz)",
+      "Read(./**/*.mangatl.json)"
+    ]
+  }
+}
