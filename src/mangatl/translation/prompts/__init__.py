@@ -77,6 +77,23 @@ SOURCE_EXTRA = {
 }
 
 
+# Speaker and name rules: (original wording, translator.clear_speaker_rules = true). With the
+# original wording local models copy the example "Shūhei" as the speaker of many balloons.
+SPEAKER_RULES = (
+    'who says it (a character name from context or the glossary) or "desconocido".',
+    "who says it: only a name that appears in the text, the glossary, the previous lines or "
+    'the story so far. Caption boxes (narration_box) are "narración" unless a character is '
+    'clearly speaking. When you cannot tell, write "desconocido"; never invent a name.',
+)
+NAMES_RULES = (
+    "keep the original order (family name first if the original does) and Hepburn "
+    "romanization (Saitō, Shūhei, Tōkyō... or without macrons if the glossary says so). "
+    "Glossary entries are mandatory.",
+    "keep the original order (family name first if the original does) and Hepburn "
+    "romanization with macrons for long vowels (as in the place names Tōkyō, Ōsaka; or "
+    "without macrons if the glossary says so). Glossary entries are mandatory.",
+)
+
 PIVOT_EXTRA = (
     "The text is an English DRAFT made from a Japanese original: each region also carries "
     "`ja` with the original. Translate the meaning into natural Spanish, using the Japanese "
@@ -85,11 +102,14 @@ PIVOT_EXTRA = (
 )
 
 
-def system_prompt(meta: ChapterMeta, pivot: bool = False) -> str:
-    """Style-guide system prompt. `pivot`: second pass of JA -> EN -> ES."""
+def system_prompt(meta: ChapterMeta, pivot: bool = False, clear_speakers: bool = False) -> str:
+    """Style-guide system prompt. `pivot`: second pass of JA -> EN -> ES.
+    `clear_speakers`: stricter speaker rules (translator.clear_speaker_rules)."""
     template = Template(resources.files(__package__).joinpath("system.md").read_text("utf-8"))
     variant_name, variant_rules = VARIANTS.get(meta.target_variant, VARIANTS["es-419"])
     return template.substitute(
+        speaker_rule=SPEAKER_RULES[clear_speakers],
+        names_rule=NAMES_RULES[clear_speakers],
         source_language="Japanese" if meta.source_lang == "ja" and not pivot else "English",
         variant_name=variant_name,
         variant_rules=variant_rules,

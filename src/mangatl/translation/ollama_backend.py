@@ -8,8 +8,10 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import re
 from contextlib import suppress
 from dataclasses import replace
 
@@ -18,6 +20,7 @@ from pydantic import ValidationError
 
 from mangatl.config import Settings
 from mangatl.models import Region
+from mangatl.ollama_runtime import effective_extra_options
 from mangatl.translation.alignment import realign
 from mangatl.translation.base import TranslationError, Translator
 from mangatl.translation.json_extract import extract_json_objects
@@ -42,6 +45,90 @@ def _ollama_schema() -> dict:
 
 
 SCHEMA = _ollama_schema()
+
+# translator.compact_output: short keys inside each region and the JSON on one line. Local
+# models emit every key of every region, so long names cost tokens (generation is ~97 % of the
+# translation time on a 6 GB GPU). The source echo is kept: alignment depends on it. The keys
+# that appear once per block keep their names: with cryptic ones ("gl") the model stopped
+# proposing glossary entries.
+COMPACT_REGION_KEYS = {
+    "id": "id",
+    "src": "source_text_corrected",
+    "who": "speaker",
+    "es": "translation",
+    "st": "style",
+    "c": "confidence",
+    "alt": "shorter_alternative",
+    "note": "translator_note",
+    "ord": "reading_order",
+}
+COMPACT_INSTRUCTIONS = """
+# Compact output (mandatory)
+Inside each entry of `regions` (they repeat for every balloon) use these short keys: `id`, \
+`src` = source_text_corrected, `who` = speaker, `es` = translation, `st` = style, \
+`c` = confidence, and only when they apply `alt` = shorter_alternative, `note` = \
+translator_note, `ord` = reading_order. Keep `regions`, `block_summary` and \
+`new_glossary_entries` (with `source`, `target`, `category`, `notes`) as described above, \
+and keep proposing glossary entries. Write the whole JSON on a single line, with no \
+indentation and no spaces between keys and values."""
+
+
+def _compact_schema() -> dict:
+    schema = copy.deepcopy(SCHEMA)
+    style = schema["properties"]["regions"]["items"]["properties"]["style"]
+    schema["properties"]["regions"]["items"] = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"},
+            "src": {"type": "string"},
+            "who": {"type": "string"},
+            "es": {"type": "string"},
+            "st": style,
+            "c": {"type": "number"},
+            "alt": {"type": "string"},
+            "note": {"type": "string"},
+            "ord": {"type": "integer"},
+        },
+        "required": ["id", "src", "who", "es", "st", "c"],
+    }
+    return schema
+
+
+COMPACT_SCHEMA = _compact_schema()
+
+
+def expand_compact(obj: dict) -> dict:
+    """Reply with short region keys -> the regular BlockTranslation shape (long keys, and the
+    one-letter top-level keys of the first version, are accepted too). Nothing is invented:
+    a missing or malformed field stays so, and validation reports it back to the model."""
+    out = {k: v for k, v in obj.items() if k not in ("r", "sum", "gl")}
+    regions = obj.get("regions", obj.get("r"))
+    if isinstance(regions, list):
+        expanded = []
+        for item in regions:
+            if isinstance(item, dict):
+                item = {COMPACT_REGION_KEYS.get(k, k): v for k, v in item.items()}
+                if item.get("shorter_alternative"):
+                    item["fits_capacity"] = False
+            expanded.append(item)
+        regions = expanded
+    if regions is not None:
+        out["regions"] = regions
+    summary = obj.get("block_summary", obj.get("sum"))
+    if summary is not None:
+        out["block_summary"] = summary
+    glossary = obj.get("new_glossary_entries", obj.get("gl"))
+    if isinstance(glossary, list):
+        legacy = {"src": "source", "es": "target", "cat": "category", "note": "notes"}
+        glossary = [
+            {legacy.get(k, k): v for k, v in entry.items()} if isinstance(entry, dict) else entry
+            for entry in glossary
+        ]
+    if glossary is not None:
+        out["new_glossary_entries"] = glossary
+    return out
+
+
 SHORTEN_SCHEMA = {
     "type": "object",
     "properties": {
@@ -62,8 +149,34 @@ class TruncatedOutputError(TranslationError):
     pass
 
 
-def parse_block(content: str) -> BlockTranslation:
+class RepetitionLoopError(TranslationError):
+    """Ollama aborted the answer: the model kept repeating a token (e.g. '¡¡¡¡…')."""
+
+
+_OUT_OF_MEMORY = re.compile(
+    r"out of memory|cudaMalloc|failed to allocate|insufficient memory|requires more", re.I
+)
+
+
+def parse_block(content: str, compact: bool = False) -> BlockTranslation:
     """Validate the model reply, tolerating text around the JSON object."""
+    if compact:
+        candidates: list[object] = []
+        with suppress(json.JSONDecodeError):
+            candidates.append(json.loads(content))
+        candidates.extend(extract_json_objects(content))
+        compact_error: ValidationError | None = None
+        for obj in candidates:
+            if not isinstance(obj, dict):
+                continue
+            try:  # expand_compact leaves long keys as they are
+                return BlockTranslation.model_validate(expand_compact(obj))
+            except ValidationError as exc:
+                compact_error = compact_error or exc
+        if compact_error is not None:
+            raise compact_error
+        # Not JSON at all (or the model used the long keys): the regular path below raises
+        # the ValidationError that is fed back to the model.
     try:
         return BlockTranslation.model_validate_json(content)
     except ValidationError as first_error:
@@ -86,25 +199,60 @@ class OllamaTranslator(Translator):
         self.base_url = self.cfg.host.rstrip("/")
         self._client = client or httpx.Client(timeout=httpx.Timeout(15.0, read=1800.0))
         self.realigned = 0
+        self._auto_layers = False  # set when forced GPU layers (num_gpu) ran out of VRAM
+        self.compact = settings.translator.compact_output
+        # Decided once, before the model is loaded (free VRAM check for num_gpu).
+        self._options = effective_extra_options(self.cfg)
 
     # ------------------------------------------------------------------ transport
-    def _chat(self, messages: list[dict[str, str]], schema: dict | None = None) -> str:
+    @property
+    def extra_options(self) -> dict[str, float | int]:
+        """Extra Ollama options this translator sends (also used to warm the model up)."""
+        options = dict(self._options)
+        if self._auto_layers:
+            options.pop("num_gpu", None)
+        return options
+
+    def _extra_options(self) -> dict[str, float | int]:
+        return self.extra_options
+
+    def _chat(
+        self,
+        messages: list[dict[str, str]],
+        schema: dict | None = None,
+        options: dict[str, float] | None = None,
+    ) -> str:
         payload = {
             "model": self.model,
             "messages": messages,
-            "format": schema or SCHEMA,
+            "format": schema or (COMPACT_SCHEMA if self.compact else SCHEMA),
             "stream": False,
             "think": self.cfg.think,
             "keep_alive": "15m",
-            "options": {"num_ctx": self.cfg.num_ctx, "temperature": self.cfg.temperature},
+            "options": {
+                **self._extra_options(),
+                "num_ctx": self.cfg.num_ctx,
+                "temperature": self.cfg.temperature,
+                **(options or {}),
+            },
         }
         try:
             resp = self._client.post(f"{self.base_url}/api/chat", json=payload)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise TranslationError(
-                f"Ollama respondió {exc.response.status_code}: {exc.response.text[:300]}"
-            ) from exc
+            if "num_gpu" in payload["options"] and _OUT_OF_MEMORY.search(exc.response.text):
+                # Forced layers no longer fit (another program took VRAM): let Ollama decide.
+                log.warning(
+                    "No hay VRAM para %s capas en la GPU (translator.ollama.extra_options."
+                    "num_gpu): se sigue con el reparto automático de Ollama",
+                    payload["options"]["num_gpu"],
+                )
+                self._auto_layers = True
+                return self._chat(messages, schema, options)
+            message = f"Ollama respondió {exc.response.status_code}: {exc.response.text[:300]}"
+            if "repeat limit" in exc.response.text:
+                raise RepetitionLoopError(message) from exc
+            raise TranslationError(message) from exc
         except httpx.HTTPError as exc:
             raise TranslationError(
                 f"No se pudo contactar a Ollama en {self.base_url}: {exc}"
@@ -129,12 +277,26 @@ class OllamaTranslator(Translator):
         return data.get("message", {}).get("content", "")
 
     def _ask(self, system: str, user: str) -> BlockTranslation:
+        if self.compact:
+            system += COMPACT_INSTRUCTIONS
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         last_error: Exception | None = None
+        options: dict[str, float] = {}
         for attempt in range(self.max_retries + 1):
-            content = self._chat(messages)
             try:
-                return parse_block(content)
+                content = self._chat(messages, options=options)
+            except RepetitionLoopError:
+                if not self.cfg.recover_repeat_loops or attempt == self.max_retries:
+                    raise
+                # Another seed and a little more temperature usually get out of the loop.
+                log.warning("El modelo entró en un bucle de repetición: se reintenta")
+                options = {
+                    "seed": attempt + 1,
+                    "temperature": min(1.0, self.cfg.temperature + 0.2 * (attempt + 1)),
+                }
+                continue
+            try:
+                return parse_block(content, self.compact)
             except ValidationError as exc:
                 last_error = exc
                 errors = "; ".join(
@@ -156,23 +318,37 @@ class OllamaTranslator(Translator):
         )
 
     # ------------------------------------------------------------------ block
+    def _split(self, system: str, ctx: BlockContext) -> BlockTranslation:
+        half = len(ctx.regions) // 2
+        first = self.translate_block(system, replace(ctx, regions=ctx.regions[:half]))
+        second = self.translate_block(
+            system, replace(ctx, regions=ctx.regions[half:], previous_lines=ctx.regions[:half])
+        )
+        return BlockTranslation(
+            regions=first.regions + second.regions,
+            block_summary=f"{first.block_summary} {second.block_summary}".strip(),
+            new_glossary_entries=first.new_glossary_entries + second.new_glossary_entries,
+        )
+
     def translate_block(self, system: str, ctx: BlockContext) -> BlockTranslation:
         try:
             result = self._ask(system, block_message(ctx))
         except TruncatedOutputError:
             if len(ctx.regions) <= 1:
                 raise
-            half = len(ctx.regions) // 2
             log.warning("Bloque demasiado largo para el contexto: se divide en dos")
-            first = self.translate_block(system, replace(ctx, regions=ctx.regions[:half]))
-            second = self.translate_block(
-                system, replace(ctx, regions=ctx.regions[half:], previous_lines=ctx.regions[:half])
-            )
-            return BlockTranslation(
-                regions=first.regions + second.regions,
-                block_summary=f"{first.block_summary} {second.block_summary}".strip(),
-                new_glossary_entries=first.new_glossary_entries + second.new_glossary_entries,
-            )
+            return self._split(system, ctx)
+        except RepetitionLoopError:
+            if not self.cfg.recover_repeat_loops:
+                raise
+            if len(ctx.regions) <= 1:
+                # Isolated: this region stays untranslated and is flagged for review.
+                log.warning(
+                    "%s: el modelo no sale del bucle; queda sin traducir", ctx.regions[0].id
+                )
+                return BlockTranslation(regions=[], block_summary="")
+            log.warning("Bucle de repetición persistente: el bloque se divide en dos")
+            return self._split(system, ctx)
 
         expected = [r.id for r in ctx.regions]
         unknown = {rt.id for rt in result.regions} - set(expected)
@@ -191,7 +367,12 @@ class OllamaTranslator(Translator):
                 len(missing),
                 ", ".join(r.id for r in missing[:6]),
             )
-            sub = self._ask(system, block_message(replace(ctx, regions=missing)))
+            try:
+                sub = self._ask(system, block_message(replace(ctx, regions=missing)))
+            except RepetitionLoopError:
+                if not self.cfg.recover_repeat_loops:
+                    raise
+                break  # the missing regions stay flagged for review
             sub_regions, moved = realign(missing, sub.regions)
             self.realigned += moved
             fresh = [rt for rt in sub_regions if rt.id not in got]

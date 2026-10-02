@@ -6,14 +6,80 @@ from pathlib import Path
 import httpx
 import pytest
 
-from mangatl.config import Settings
+from mangatl.config import GgufImport, Settings
 from mangatl.ollama_runtime import (
     OllamaError,
     OllamaRuntime,
     cuda_dir_to_prune,
+    modelfile_text,
     parse_compute_devices,
     split_model_name,
 )
+
+TEXT_ONLY = GgufImport(
+    name="qwen3.5-texto:9b",
+    repo="unsloth/Qwen3.5-9B-GGUF",
+    file="Qwen3.5-9B-Q4_K_M.gguf",
+    renderer="qwen3.5",
+    parser="qwen3.5",
+    parameters={"presence_penalty": 1.5, "top_k": 20},
+)
+
+
+def test_modelfile_keeps_the_family_renderer_and_parameters() -> None:
+    text = modelfile_text(Path("R:/models/gguf/Qwen3.5-9B-Q4_K_M.gguf"), TEXT_ONLY)
+    assert text.splitlines() == [
+        "FROM R:/models/gguf/Qwen3.5-9B-Q4_K_M.gguf",
+        "RENDERER qwen3.5",
+        "PARSER qwen3.5",
+        "PARAMETER presence_penalty 1.5",
+        "PARAMETER top_k 20",
+    ]
+
+
+def test_create_from_gguf_runs_ollama_create_and_cleans_up(
+    settings: Settings, monkeypatch, tmp_path: Path
+) -> None:
+    import subprocess
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        assert Path(args[-1]).read_text(encoding="utf-8").startswith("FROM ")
+        return subprocess.CompletedProcess(args, 0, "success", "")
+
+    monkeypatch.setattr("mangatl.ollama_runtime.subprocess.run", fake_run)
+    rt = OllamaRuntime(settings)
+    rt.create_from_gguf("qwen3.5-texto:9b", tmp_path / "m.gguf", TEXT_ONLY)
+    assert calls[0][1:4] == ["create", "qwen3.5-texto:9b", "-f"]
+    assert not Path(calls[0][-1]).exists()  # the Modelfile is removed
+
+    def failing(args, **kwargs):
+        return subprocess.CompletedProcess(args, 1, "", "error: unsupported architecture")
+
+    monkeypatch.setattr("mangatl.ollama_runtime.subprocess.run", failing)
+    with pytest.raises(OllamaError, match="unsupported architecture"):
+        rt.create_from_gguf("x:1", tmp_path / "m.gguf", TEXT_ONLY)
+
+
+def test_gguf_section_is_read_from_toml(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[translator.ollama]\nmodel = "mi-modelo:9b"\n'
+        '[translator.ollama.gguf]\nname = "mi-modelo:9b"\nrepo = "usuario/Modelo-GGUF"\n'
+        'file = "Modelo-Q4_K_M.gguf"\nparameters = { top_k = 20 }\n',
+        encoding="utf-8",
+    )
+    from mangatl.config import TEXT_ONLY_QWEN_9B, Settings, load_settings
+
+    gguf = load_settings(config).translator.ollama.gguf
+    assert gguf is not None and gguf.file == "Modelo-Q4_K_M.gguf"
+    assert gguf.parameters == {"top_k": 20}
+    # Without the section, the default is the text-only Qwen3.5 9B, matching the default model.
+    default = Settings(root=tmp_path).translator.ollama
+    assert default.gguf == TEXT_ONLY_QWEN_9B and default.gguf.name == default.model
+
 
 SERVER_LOG = """\
 time=2026-09-25T15:00:00.000-06:00 level=INFO source=routes.go:1500 msg="Listening on 127.0.0.1:11434 (version 0.34.4)"
@@ -24,6 +90,37 @@ time=2026-09-25T15:00:01.000-06:00 level=INFO source=types.go:131 msg="inference
 
 def make_runtime(settings: Settings, handler) -> OllamaRuntime:
     return OllamaRuntime(settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+
+def test_chat_uses_the_same_extra_options_as_the_translator(settings: Settings) -> None:
+    settings.translator.ollama.extra_options = {"num_gpu": 27}
+    settings.translator.ollama.num_gpu_min_free_mb = 0  # no VRAM check in this test
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"message": {"content": "hola"}})
+
+    make_runtime(settings, handler).chat("m", "Hola", num_predict=1)
+    assert sent[0]["options"]["num_gpu"] == 27 and sent[0]["options"]["num_predict"] == 1
+
+
+@pytest.mark.parametrize(("free_mb", "kept"), [(5300, True), (4600, False)])
+def test_forced_layers_need_enough_free_vram(
+    settings: Settings, monkeypatch, free_mb: int, kept: bool
+) -> None:
+    from mangatl import gpu
+    from mangatl.ollama_runtime import effective_extra_options
+
+    total = 6141
+    info = gpu.NvidiaSmiInfo("RTX 4050", "616.64", total, total - free_mb)
+    monkeypatch.setattr(gpu, "query_nvidia_smi", lambda: info)
+    cfg = settings.translator.ollama
+    cfg.extra_options = {"num_gpu": 27, "presence_penalty": 0.0}
+    options = effective_extra_options(cfg)
+    assert ("num_gpu" in options) is kept and options["presence_penalty"] == 0.0
+    monkeypatch.setattr(gpu, "query_nvidia_smi", lambda: None)  # no nvidia-smi: trust config
+    assert effective_extra_options(cfg)["num_gpu"] == 27
 
 
 def test_parse_compute_devices() -> None:

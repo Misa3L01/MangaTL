@@ -89,13 +89,44 @@ class InpaintConfig(BaseModel):
     )
     lama_file: Path = Path("models/lama/anime-manga-big-lama.pt")
     lama_max_side: int = Field(1024, ge=256)
+    # Also clean the bright areas of a bubble split off by a line of text that touches the
+    # outline on both sides (their glyphs and the dividing line were left). Never applied to
+    # open outlines.
+    join_text_areas: bool = True
+
+
+class GgufImport(BaseModel):
+    """Build an Ollama model from a GGUF on Hugging Face instead of the Ollama library."""
+
+    name: str  # Ollama model this GGUF becomes; used only when it is `translator.ollama.model`
+    repo: str
+    file: str
+    revision: str = "main"
+    # Ollama's built-in prompt renderer/parser for the family (e.g. "qwen3.5").
+    renderer: str | None = None
+    parser: str | None = None
+    parameters: dict[str, float | int] = Field(default_factory=dict)
+
+
+# Qwen3.5 9B Q4_K_M without the vision encoder: the library `qwen3.5:9b` makes Ollama reserve
+# ~1.3 GB of VRAM for it, which MangaTL never uses (23 of 33 layers on the GPU instead of 18 of
+# 34, -17 % translation time). Same parameters and prompt renderer as the library model.
+TEXT_ONLY_QWEN_9B = GgufImport(
+    name="qwen3.5-texto:9b",
+    repo="unsloth/Qwen3.5-9B-GGUF",
+    file="Qwen3.5-9B-Q4_K_M.gguf",
+    revision="3885219b6810b007914f3a7950a8d1b469d598a5",
+    renderer="qwen3.5",
+    parser="qwen3.5",
+    parameters={"presence_penalty": 1.5, "temperature": 1, "top_k": 20, "top_p": 0.95},
+)
 
 
 class OllamaConfig(BaseModel):
     host: str = "http://127.0.0.1:11434"
-    # Chosen after the Phase 2 comparison: clearly more accurate than qwen3.5:4b (names,
-    # terms, meaning) at ~4x the time; runs partly in RAM on a 6 GB GPU.
-    model: str = "qwen3.5:9b"
+    # Text-only Qwen3.5 9B (see TEXT_ONLY_QWEN_9B). Clearly more accurate than qwen3.5:4b
+    # (names, terms, meaning); runs partly in RAM on a 6 GB GPU. Fast mode: qwen3.5:4b.
+    model: str = "qwen3.5-texto:9b"
     num_ctx: int = Field(16384, ge=2048)
     temperature: float = Field(0.3, ge=0.0, le=2.0)
     # Reasoning ("thinking") mode: off by default, it multiplies latency for little gain here.
@@ -108,6 +139,20 @@ class OllamaConfig(BaseModel):
     models_dir: Path = Path("models/ollama")
     flash_attention: bool = True
     kv_cache_type: Literal["f16", "q8_0", "q4_0"] = "q8_0"
+    # When Ollama aborts an answer because the model loops ("¡¡¡¡…", HTTP 500 "token repeat
+    # limit"): retry with another seed, then split the block, instead of failing the chapter.
+    recover_repeat_loops: bool = True
+    # Extra Ollama options for every translation request, e.g. {num_gpu = 27} (layers on the
+    # GPU; 27 is the measured best for the text-only 9B on a 6 GB GPU) or
+    # {presence_penalty = 0.0}. Empty: the model's own defaults and automatic layer placement.
+    extra_options: dict[str, float | int] = Field(default_factory=dict)
+    # num_gpu is applied only with at least this much free VRAM before loading the model. With
+    # less (another program is using the GPU), forced layers do not fail on Windows: the driver
+    # spills them into shared memory and translation gets slower than automatic placement.
+    num_gpu_min_free_mb: int = Field(4800, ge=0)
+    # `mangatl setup` creates this model from a GGUF instead of pulling it (only when its
+    # `name` is `model`; any other model is pulled from the Ollama library as usual).
+    gguf: GgufImport | None = Field(default_factory=lambda: TEXT_ONLY_QWEN_9B.model_copy())
 
 
 class TranslatorConfig(BaseModel):
@@ -124,6 +169,12 @@ class TranslatorConfig(BaseModel):
     manual_part_chars: int = Field(20000, ge=2000)
     # Two passes per block: Japanese -> English draft -> Spanish (about twice as slow).
     pivot_english: bool = False
+    # Stricter speaker rules in the prompt (no invented names, "narración" for caption boxes)
+    # and name examples that cannot be taken for characters.
+    clear_speaker_rules: bool = True
+    # Short JSON keys inside each region and the answer on one line: -34 % output tokens.
+    # Keep translator.ollama.recover_repeat_loops on with it.
+    compact_output: bool = True
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
 
 
@@ -206,6 +257,32 @@ class Settings(BaseSettings):
     def resolve(self, path: Path) -> Path:
         """Resolve a configured path against the project root."""
         return path if path.is_absolute() else (self.root / path).resolve()
+
+
+def apply_overrides(settings: Settings, overrides: list[str]) -> Settings:
+    """Copy of `settings` with dotted `key=value` overrides (values parsed as TOML literals;
+    bare words are strings). Raises ValueError on malformed items or unknown keys."""
+    import tomllib
+
+    data = settings.model_dump()
+    for item in overrides:
+        key, sep, raw = item.partition("=")
+        if not sep:
+            raise ValueError(f"Se esperaba CLAVE=VALOR: {item}")
+        try:
+            value = tomllib.loads(f"v = {raw}")["v"]
+        except tomllib.TOMLDecodeError:
+            value = raw  # e.g. translator.ollama.model=qwen3.5:4b
+        node = data
+        *parents, leaf = key.strip().split(".")
+        for part in parents:
+            if not isinstance(node.get(part), dict):
+                raise ValueError(f"Clave desconocida: {key}")
+            node = node[part]
+        if leaf not in node:
+            raise ValueError(f"Clave desconocida: {key}")
+        node[leaf] = value
+    return Settings.model_validate(data)
 
 
 def default_config_path(root: Path | None = None) -> Path:
