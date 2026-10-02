@@ -481,7 +481,7 @@ class SetupRunner:
             if self.check_only or self.skip_llm:
                 self._add(f"LLM {cfg.model}", "warn", "No descargado")
                 return
-            if cfg.gguf is not None:
+            if cfg.gguf is not None and cfg.gguf.name == cfg.model:
                 self._import_gguf(rt, cfg.model, cfg.gguf)
             else:
                 size = rt.remote_model_size(cfg.model) or int(3.5 * 2**30)

@@ -77,12 +77,13 @@ SOURCE_EXTRA = {
 }
 
 
-# Speaker and name rules: (current wording, translator.clear_speaker_rules = true). With the
-# current wording local models copy the example "Shūhei" as the speaker of many balloons.
+# Speaker and name rules: (original wording, translator.clear_speaker_rules = true). With the
+# original wording local models copy the example "Shūhei" as the speaker of many balloons.
 SPEAKER_RULES = (
     'who says it (a character name from context or the glossary) or "desconocido".',
     "who says it: only a name that appears in the text, the glossary, the previous lines or "
-    'the story so far. Caption boxes (narration_box) are "narración" unless a character is '
+    "the story so far, written in the same romanization as your translation (never in "
+    'Japanese script). Caption boxes (narration_box) are "narración" unless a character is '
     'clearly speaking. When you cannot tell, write "desconocido"; never invent a name.',
 )
 NAMES_RULES = (

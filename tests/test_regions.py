@@ -75,7 +75,7 @@ def text_mask_on_page(draft) -> np.ndarray:
 
 def test_join_text_areas_cleans_text_split_off_by_a_line_touching_the_outline() -> None:
     page, dets = split_box_page()
-    [plain] = build_regions(page, dets, DetectionConfig(), InpaintConfig())
+    [plain] = build_regions(page, dets, DetectionConfig(), InpaintConfig(join_text_areas=False))
     [joined] = build_regions(page, dets, DetectionConfig(), InpaintConfig(join_text_areas=True))
     before, after = text_mask_on_page(plain), text_mask_on_page(joined)
     top_glyph = (slice(110, 121), slice(200, 216))
@@ -98,7 +98,7 @@ def test_join_text_areas_never_touches_open_outlines() -> None:
         RawDetection("bubble", (150, 80, 450, 520), 0.97),
         RawDetection("text_bubble", (230, 195, 370, 423), 0.95),
     ]
-    [plain] = build_regions(page, dets, DetectionConfig(), InpaintConfig())
+    [plain] = build_regions(page, dets, DetectionConfig(), InpaintConfig(join_text_areas=False))
     [joined] = build_regions(page, dets, DetectionConfig(), InpaintConfig(join_text_areas=True))
     assert "contorno abierto" in joined.notes
     # Open containers reach the page around them: the option leaves them exactly as before.

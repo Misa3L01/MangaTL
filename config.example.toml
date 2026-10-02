@@ -41,7 +41,7 @@ use_lama = true              # LaMa para texto sobre dibujo/tramas y letras que 
 lama_url = "https://github.com/Sanster/models/releases/download/AnimeMangaInpainting/anime-manga-big-lama.pt"
 lama_file = "models/lama/anime-manga-big-lama.pt"
 lama_max_side = 1024         # lado máximo del recorte que procesa LaMa (menos = menos VRAM)
-join_text_areas = false      # experimental: limpiar también las zonas del globo que separa una línea de texto pegada al borde
+join_text_areas = true       # limpiar también las zonas del globo que separa una línea de texto pegada al borde
 
 [translator]
 backend = "ollama"           # "ollama" (local) o "manual" (chat de claude.ai)
@@ -53,12 +53,12 @@ previous_lines = 6           # líneas del bloque anterior que se repiten como c
 max_retries = 2              # reintentos si el JSON es inválido o faltan regiones
 manual_part_chars = 20000    # tamaño máximo de cada parte del prompt manual
 pivot_english = false        # traducir en dos pasos: japonés -> inglés -> español (el doble de lento)
-clear_speaker_rules = false  # experimental: reglas más estrictas para el hablante (no inventar nombres)
-compact_output = false       # experimental: respuesta del modelo con claves cortas (menos tokens)
+clear_speaker_rules = true   # reglas claras para el hablante (no inventar nombres, nombres romanizados)
+compact_output = true        # respuesta del modelo con claves cortas: −34 % de tokens (usar con recover_repeat_loops)
 
 [translator.ollama]
 host = "http://127.0.0.1:11434"
-model = "qwen3.5:9b"         # recomendado; rápido: "qwen3.5:4b" (o --model en la CLI)
+model = "qwen3.5-texto:9b"   # 9B sin visión (ver [translator.ollama.gguf]); rápido: "qwen3.5:4b" (o --model)
 num_ctx = 16384
 temperature = 0.3
 think = false                # modo "razonamiento": más lento, apagado por defecto
@@ -69,20 +69,23 @@ version = "v0.34.4"
 models_dir = "models/ollama"
 flash_attention = true
 kv_cache_type = "q8_0"       # "f16" | "q8_0" | "q4_0" (menos VRAM para el contexto)
-recover_repeat_loops = false # si el modelo entra en bucle ("¡¡¡¡…"), reintentar y partir el bloque en vez de abortar
-extra_options = {}           # opciones extra de Ollama, p. ej. { num_gpu = 27 } (capas en la GPU)
+recover_repeat_loops = true  # si el modelo entra en bucle ("¡¡¡¡…"), reintentar y partir el bloque en vez de abortar
+# Opciones extra de Ollama. Con una GPU de 6 GB, { num_gpu = 27 } pone 27 de 33 capas del 9B en
+# la GPU (−35 % de tiempo; si falta VRAM, MangaTL vuelve solo al reparto automático).
+# Vacío = Ollama decide cuántas capas caben (23 de 33 en 6 GB).
+extra_options = {}
 
-# Opcional: `mangatl setup` crea el modelo desde un GGUF de Hugging Face en vez de bajarlo
-# de Ollama. El 9B "solo texto" no carga el codificador de visión (~1,3 GB de VRAM que
-# MangaTL no usa), así que entran más capas en la GPU. Para usarlo, pon
-# model = "qwen3.5-texto:9b" arriba y descomenta estas líneas:
-# [translator.ollama.gguf]
-# repo = "unsloth/Qwen3.5-9B-GGUF"
-# file = "Qwen3.5-9B-Q4_K_M.gguf"
-# revision = "3885219b6810b007914f3a7950a8d1b469d598a5"
-# renderer = "qwen3.5"
-# parser = "qwen3.5"
-# parameters = { presence_penalty = 1.5, temperature = 1, top_k = 20, top_p = 0.95 }
+# `mangatl setup` crea este modelo desde un GGUF de Hugging Face en vez de bajarlo de Ollama.
+# El 9B "solo texto" no carga el codificador de visión (~1,3 GB de VRAM que MangaTL no usa),
+# así que entran más capas en la GPU. Solo se usa cuando `name` es el `model` de arriba.
+[translator.ollama.gguf]
+name = "qwen3.5-texto:9b"
+repo = "unsloth/Qwen3.5-9B-GGUF"
+file = "Qwen3.5-9B-Q4_K_M.gguf"
+revision = "3885219b6810b007914f3a7950a8d1b469d598a5"
+renderer = "qwen3.5"
+parser = "qwen3.5"
+parameters = { presence_penalty = 1.5, temperature = 1, top_k = 20, top_p = 0.95 }
 
 # Fuente por estilo de texto. Deben incluir á é í ó ú ü ñ ¿ ¡ (mangatl setup lo verifica).
 # Para usar Anime Ace u otra fuente propia, ver README → "Cambiar la fuente".

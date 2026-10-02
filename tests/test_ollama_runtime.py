@@ -17,6 +17,7 @@ from mangatl.ollama_runtime import (
 )
 
 TEXT_ONLY = GgufImport(
+    name="qwen3.5-texto:9b",
     repo="unsloth/Qwen3.5-9B-GGUF",
     file="Qwen3.5-9B-Q4_K_M.gguf",
     renderer="qwen3.5",
@@ -65,16 +66,19 @@ def test_create_from_gguf_runs_ollama_create_and_cleans_up(
 def test_gguf_section_is_read_from_toml(tmp_path: Path) -> None:
     config = tmp_path / "config.toml"
     config.write_text(
-        '[translator.ollama]\nmodel = "qwen3.5-texto:9b"\n'
-        '[translator.ollama.gguf]\nrepo = "unsloth/Qwen3.5-9B-GGUF"\n'
-        'file = "Qwen3.5-9B-Q4_K_M.gguf"\nparameters = { top_k = 20 }\n',
+        '[translator.ollama]\nmodel = "mi-modelo:9b"\n'
+        '[translator.ollama.gguf]\nname = "mi-modelo:9b"\nrepo = "usuario/Modelo-GGUF"\n'
+        'file = "Modelo-Q4_K_M.gguf"\nparameters = { top_k = 20 }\n',
         encoding="utf-8",
     )
-    from mangatl.config import load_settings
+    from mangatl.config import TEXT_ONLY_QWEN_9B, Settings, load_settings
 
     gguf = load_settings(config).translator.ollama.gguf
-    assert gguf is not None and gguf.file == "Qwen3.5-9B-Q4_K_M.gguf"
+    assert gguf is not None and gguf.file == "Modelo-Q4_K_M.gguf"
     assert gguf.parameters == {"top_k": 20}
+    # Without the section, the default is the text-only Qwen3.5 9B, matching the default model.
+    default = Settings(root=tmp_path).translator.ollama
+    assert default.gguf == TEXT_ONLY_QWEN_9B and default.gguf.name == default.model
 
 
 SERVER_LOG = """\
@@ -86,6 +90,18 @@ time=2026-09-25T15:00:01.000-06:00 level=INFO source=types.go:131 msg="inference
 
 def make_runtime(settings: Settings, handler) -> OllamaRuntime:
     return OllamaRuntime(settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+
+def test_chat_uses_the_same_extra_options_as_the_translator(settings: Settings) -> None:
+    settings.translator.ollama.extra_options = {"num_gpu": 27}
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"message": {"content": "hola"}})
+
+    make_runtime(settings, handler).chat("m", "Hola", num_predict=1)
+    assert sent[0]["options"]["num_gpu"] == 27 and sent[0]["options"]["num_predict"] == 1
 
 
 def test_parse_compute_devices() -> None:

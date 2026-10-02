@@ -349,13 +349,16 @@ class OllamaRuntime:
         return [m["name"] for m in self.running_models()]
 
     def chat(self, model: str, prompt: str, **options: object) -> dict:
-        """Single non-streaming chat turn (used for smoke tests; the translator has its own)."""
+        """Single non-streaming chat turn (used for smoke tests; the translator has its own).
+
+        Same extra options as the translator (e.g. num_gpu): a different layer placement
+        would make Ollama reload the model on the first translation request."""
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "think": self.cfg.think,
-            "options": {"num_ctx": self.cfg.num_ctx, **options},
+            "options": {**self.cfg.extra_options, "num_ctx": self.cfg.num_ctx, **options},
         }
         resp = self._client.post(f"{self.base_url}/api/chat", json=payload)
         resp.raise_for_status()

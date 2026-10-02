@@ -82,7 +82,13 @@ def test_compact_parser_accepts_long_keys_and_text_around() -> None:
     assert len(parse_block(wrapped, compact=True).regions) == 2
     with pytest.raises(ValidationError):
         parse_block("esto no es json", compact=True)
-    assert expand_compact({})["regions"] == []
+    assert expand_compact({}) == {}
+    # Malformed answers must fail validation (so the error goes back to the model), not
+    # pass as a block with zero regions.
+    with pytest.raises(ValidationError):
+        parse_block('{"regions": "no es una lista", "block_summary": "x"}', compact=True)
+    with pytest.raises(ValidationError):
+        parse_block('{"regions": []}', compact=True)  # no block_summary
 
 
 def test_compact_request_uses_short_schema_and_instructions(

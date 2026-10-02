@@ -438,7 +438,7 @@ def ollama_status(ctx: typer.Context) -> None:
 @ollama_app.command("pull")
 def ollama_pull(
     ctx: typer.Context,
-    model: Annotated[str, typer.Argument(help="Modelo de Ollama, p. ej. qwen3.5:9b.")],
+    model: Annotated[str, typer.Argument(help="Modelo de Ollama, p. ej. qwen3.5:4b.")],
 ) -> None:
     """Descarga un modelo a models\\ollama (muestra el tamaño y respeta el espacio mínimo)."""
     from mangatl.bootstrap import download_progress
@@ -446,6 +446,9 @@ def ollama_pull(
     from mangatl.ollama_runtime import OllamaRuntime
 
     settings: Settings = ctx.obj
+    gguf = settings.translator.ollama.gguf
+    if gguf is not None and gguf.name == model:
+        _fail(f"«{model}» se crea desde {gguf.repo}/{gguf.file}: ejecuta  uv run mangatl setup")
     rt = OllamaRuntime(settings)
     size = rt.remote_model_size(model)
     if size is None:

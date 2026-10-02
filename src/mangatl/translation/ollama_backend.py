@@ -98,26 +98,34 @@ COMPACT_SCHEMA = _compact_schema()
 
 def expand_compact(obj: dict) -> dict:
     """Reply with short region keys -> the regular BlockTranslation shape (long keys, and the
-    one-letter top-level keys of the first version, are accepted too)."""
-    regions = []
-    for item in obj.get("regions") or obj.get("r") or []:
-        if not isinstance(item, dict):
-            continue
-        region = {COMPACT_REGION_KEYS.get(k, k): v for k, v in item.items()}
-        if region.get("shorter_alternative"):
-            region["fits_capacity"] = False
-        regions.append(region)
-    legacy = {"src": "source", "es": "target", "cat": "category", "note": "notes"}
-    glossary = [
-        {legacy.get(k, k): v for k, v in entry.items()}
-        for entry in obj.get("new_glossary_entries") or obj.get("gl") or []
-        if isinstance(entry, dict)
-    ]
-    return {
-        "regions": regions,
-        "block_summary": obj.get("block_summary") or obj.get("sum") or "",
-        "new_glossary_entries": glossary,
-    }
+    one-letter top-level keys of the first version, are accepted too). Nothing is invented:
+    a missing or malformed field stays so, and validation reports it back to the model."""
+    out = {k: v for k, v in obj.items() if k not in ("r", "sum", "gl")}
+    regions = obj.get("regions", obj.get("r"))
+    if isinstance(regions, list):
+        expanded = []
+        for item in regions:
+            if isinstance(item, dict):
+                item = {COMPACT_REGION_KEYS.get(k, k): v for k, v in item.items()}
+                if item.get("shorter_alternative"):
+                    item["fits_capacity"] = False
+            expanded.append(item)
+        regions = expanded
+    if regions is not None:
+        out["regions"] = regions
+    summary = obj.get("block_summary", obj.get("sum"))
+    if summary is not None:
+        out["block_summary"] = summary
+    glossary = obj.get("new_glossary_entries", obj.get("gl"))
+    if isinstance(glossary, list):
+        legacy = {"src": "source", "es": "target", "cat": "category", "note": "notes"}
+        glossary = [
+            {legacy.get(k, k): v for k, v in entry.items()} if isinstance(entry, dict) else entry
+            for entry in glossary
+        ]
+    if glossary is not None:
+        out["new_glossary_entries"] = glossary
+    return out
 
 
 SHORTEN_SCHEMA = {

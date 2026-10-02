@@ -14,8 +14,13 @@ def test_defaults_match_user_choices(settings: Settings) -> None:
     assert tr.target_variant == "es-419"
     assert tr.honorifics == "keep"
     assert tr.sfx_mode == "annotate"
-    assert tr.ollama.model == "qwen3.5:9b"
+    assert tr.ollama.model == "qwen3.5-texto:9b"
+    assert tr.ollama.gguf is not None and tr.ollama.gguf.name == tr.ollama.model
     assert tr.ollama.think is False
+    # Adopted after the optimization experiments (README → "Experimentos de optimización").
+    assert tr.compact_output and tr.clear_speaker_rules and tr.ollama.recover_repeat_loops
+    assert settings.inpaint.join_text_areas
+    assert tr.ollama.extra_options == {}  # num_gpu depends on the GPU: config.toml only
     assert settings.typesetting.fonts.normal.name == "ComicNeue-Bold.ttf"
     assert settings.typesetting.fonts.shout.name == "Bangers-Regular.ttf"
     assert settings.setup.min_free_disk_gb == 3.0

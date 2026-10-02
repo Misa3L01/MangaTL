@@ -156,6 +156,7 @@ def ctx_for(project: Project, page: int = 1) -> BlockContext:
 def test_ollama_request_uses_schema_num_ctx_and_no_thinking(
     settings: Settings, small_project: Project
 ) -> None:
+    settings.translator.compact_output = False  # the compact schema has its own tests
     ctx = ctx_for(small_project)
     tr, reqs = make_ollama(settings, [ollama_reply(fake_answer(ctx).model_dump_json())])
     result = tr.translate_block("sys", ctx)
@@ -171,7 +172,10 @@ def repeat_limit() -> httpx.Response:
     return httpx.Response(500, json={"error": "prediction aborted, token repeat limit reached"})
 
 
-def test_repeat_loop_fails_the_block_by_default(settings: Settings, small_project: Project) -> None:
+def test_repeat_loop_fails_the_block_without_recovery(
+    settings: Settings, small_project: Project
+) -> None:
+    settings.translator.ollama.recover_repeat_loops = False
     tr, _ = make_ollama(settings, [repeat_limit()])
     with pytest.raises(TranslationError, match="repeat limit"):
         tr.translate_block("sys", ctx_for(small_project))
