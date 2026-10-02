@@ -17,8 +17,9 @@ para uso secundario ([condiciones](https://densho810.com/free/)). Resultado auto
 
 > **Estado:** Fase 3 completa: además de todo lo anterior (japonés e inglés, LaMa, orden por
 > viñetas, glosario por serie, versión corta, PDF), hay un **editor web local**
-> (`mangatl ui`) para revisar y corregir cada página. Ver
-> [Limitaciones actuales](#limitaciones-actuales-fase-2) y la [hoja de ruta](#hoja-de-ruta).
+> (`mangatl ui`) para revisar y corregir cada página. Desde octubre de 2026 la traducción local
+> es **2,25× más rápida** con la misma calidad ([experimentos](#experimentos-de-optimización-octubre-de-2026)).
+> Ver [Limitaciones actuales](#limitaciones-actuales-fase-2) y la [hoja de ruta](#hoja-de-ruta).
 
 ## Características
 
@@ -44,8 +45,9 @@ para uso secundario ([condiciones](https://densho810.com/free/)). Resultado auto
 
 - Windows 10/11 con GPU NVIDIA y driver reciente (probado con RTX 4050 Laptop 6 GB, driver 616.64).
 - ~15 GB libres en la unidad del proyecto (ver [Espacio en disco](#espacio-en-disco)).
-- 16 GB de RAM: el modelo recomendado (`qwen3.5:9b`) usa unos 2,7 GB de RAM además de la
-  VRAM; conviene cerrar el navegador y juegos mientras traduce.
+- 16 GB de RAM: el modelo por defecto (`qwen3.5-texto:9b`, el Qwen3.5 9B sin visión) usa
+  ~4,4 GB de VRAM y ~1 GB de RAM con `num_gpu = 27`; conviene cerrar el navegador y juegos
+  mientras traduce.
 - Git (opcional) y conexión a internet solo para la instalación.
 
 No hace falta instalar Python, CUDA Toolkit ni Ollama por separado: todo se instala dentro de
@@ -81,8 +83,10 @@ proyecto**, y no se modifica ninguna variable de entorno permanente de Windows. 
    .\scripts\bootstrap.ps1
    ```
 
-4. Descarga los modelos e instala Ollama portable (~8 GB de descarga). Antes de cada descarga
+4. Descarga los modelos e instala Ollama portable (~7 GB de descarga). Antes de cada descarga
    se muestra su tamaño y el espacio que quedará; si fuera a quedar menos de 3 GB libres, se cancela.
+   El LLM (`qwen3.5-texto:9b`) se crea en Ollama a partir del GGUF de Hugging Face fijado en
+   `config.toml`; la descarga temporal se borra al terminar.
 
    ```powershell
    uv run mangatl setup
@@ -270,7 +274,7 @@ Probados con las páginas 61–72 de *Black Jack ni Yoroshiku* (91 regiones), un
 
 | Variante | Tiempo (12 págs.) | s/página | En GPU | Resultado |
 |---|---|---|---|---|
-| **`qwen3.5:9b` directo** (por defecto) | 617 s | 51 | 55 % (resto en RAM) | El más fiel: acierta nombres (Ushida, Eiroku, Saitō-kun) y términos (メス → «bisturí»). |
+| **`qwen3.5:9b` directo** (elegido; hoy se usa su versión sin visión, ver abajo) | 617 s | 51 | 55 % (resto en RAM) | El más fiel: acierta nombres (Ushida, Eiroku, Saitō-kun) y términos (メス → «bisturí»). |
 | `qwen3.5:4b` directo (`--model qwen3.5:4b`) | 153 s | 13 | 100 % | Rápido; borrador utilizable, pero confunde nombres y algunos sentidos. |
 | `qwen3.5:4b` pivote JA→EN→ES (`translator.pivot_english`) | 283 s | 24 | 100 % | Algo mejor en frases sueltas, peor en otras; no compensa el doble de tiempo. |
 | `translategemma:4b` | 295 s | 25 | 100 % | No sigue el protocolo JSON (43 regiones sin traducir): descartado y borrado. |
@@ -281,8 +285,9 @@ backend `manual` (claude.ai) sigue siendo la opción recomendada.
 ### Experimentos de optimización (octubre de 2026)
 
 Mismas 12 páginas (61–72, 91 regiones; en 52 se anotó a mano quién habla), una variante por
-vez, con el modelo ya cargado, medidas con `scripts/compare_models.py --set ...`. Todas son
-opciones de `config.toml` **apagadas por defecto**.
+vez, con el modelo ya cargado, medidas con `scripts/compare_models.py --set ...`. Las
+**adoptadas vienen activadas por defecto** desde octubre de 2026; las descartadas no quedaron en
+el código.
 
 | Variante | Tiempo (12 págs.) | s/página | tok/s | Tokens de salida | En GPU | Sin traducir | Hablantes bien / mal | Resultado |
 |---|---|---|---|---|---|---|---|---|
@@ -342,31 +347,15 @@ Limpieza, medida con `scripts/reclean.py` en el capítulo 2 completo (24 página
 - **E2:** LaMa repinta solo las letras en vez de la caja entera. Mucho mejor en carteles con
   fondo liso (el cartel del hospital queda blanco en vez de una mancha oscura), pero peor sobre
   trama o textura: LaMa rellena la silueta de las letras con gris liso y quedan «letras
-  fantasma». Sin una regla fiable para elegir, la caja entera sigue siendo lo más seguro; la
-  rama `exp/e2-mascara` queda para una futura opción por región en el editor.
+  fantasma». Sin una regla fiable para elegir, la caja entera sigue siendo lo más seguro; elegir
+  «caja» o «letras» por región desde el editor queda como idea para el futuro.
 
-Configuración recomendada (después, `uv run mangatl setup` crea el modelo de solo texto):
+Todo lo adoptado ya es la configuración por defecto. Lo único que depende del equipo es cuántas
+capas del 9B van en la GPU; con 6 GB de VRAM, en `config.toml`:
 
 ```toml
-[translator]
-compact_output = true
-clear_speaker_rules = true
-
 [translator.ollama]
-model = "qwen3.5-texto:9b"
-recover_repeat_loops = true
 extra_options = { num_gpu = 27 }
-
-[translator.ollama.gguf]
-repo = "unsloth/Qwen3.5-9B-GGUF"
-file = "Qwen3.5-9B-Q4_K_M.gguf"
-revision = "3885219b6810b007914f3a7950a8d1b469d598a5"
-renderer = "qwen3.5"
-parser = "qwen3.5"
-parameters = { presence_penalty = 1.5, temperature = 1, top_k = 20, top_p = 0.95 }
-
-[inpaint]
-join_text_areas = true
 ```
 
 ### Rendimiento medido
@@ -391,7 +380,7 @@ un minuto.
 
 ### Limitaciones actuales (Fase 2)
 
-- **Calidad del modelo local:** incluso `qwen3.5:9b` comete errores de sentido y de lectura de
+- **Calidad del modelo local:** incluso el 9B comete errores de sentido y de lectura de
   nombres (春日部 → «Haruhata» en vez de Kasukabe) y casi nunca sabe quién habla. Corrige los
   nombres una vez en el glosario y quedan fijos para los capítulos siguientes.
 - **Onomatopeyas:** solo se reconocen como tales si el modelo las marca con estilo `sfx`;
@@ -439,10 +428,15 @@ Edita `config.toml` (está fuera de git). Opciones principales:
 | `translator.target_variant` | `es-419` | `es-419` · `es-MX` · `es-ES` · `es-AR` |
 | `translator.honorifics` | `keep` | `keep` · `adapt` · `mixed` |
 | `translator.sfx_mode` | `annotate` | `ignore` · `annotate` · `replace` (Fase 4) |
-| `translator.ollama.model` | `qwen3.5:9b` | cualquier modelo de Ollama (`qwen3.5:4b` = rápido) |
+| `translator.ollama.model` | `qwen3.5-texto:9b` | cualquier modelo de Ollama (`qwen3.5:4b` = rápido) |
+| `translator.ollama.extra_options` | `{}` | p. ej. `{ num_gpu = 27 }` con 6 GB de VRAM (capas en la GPU) |
 | `translator.ollama.num_ctx` | `16384` | tamaño del contexto del LLM |
+| `translator.compact_output` | `true` | respuesta del modelo con claves cortas (−34 % de tokens) |
+| `translator.clear_speaker_rules` | `true` | reglas claras para el hablante (no inventar nombres) |
+| `translator.ollama.recover_repeat_loops` | `true` | recuperar los bucles de repetición sin abortar el capítulo |
 | `translator.pivot_english` | `false` | traducir en dos pasos JA→EN→ES |
 | `inpaint.use_lama` | `true` | LaMa para texto sobre dibujo y tramas |
+| `inpaint.join_text_areas` | `true` | limpiar las zonas de un globo partidas por una línea de texto |
 | `detection.panel_order` | `true` | orden de lectura por viñetas |
 | `export.formats` | `["cbz", "pdf"]` | formatos empaquetados además de los PNG |
 
@@ -532,10 +526,13 @@ Lo único que Ollama escribe fuera del proyecto es su clave de identidad
 | Ollama portable (solo el runtime CUDA 13) | 0,7 GB |
 | Detector + manga-ocr | 0,6 GB |
 | LaMa | 0,2 GB |
-| LLM `qwen3.5:9b` (recomendado) | 6,1 GB |
+| LLM `qwen3.5-texto:9b` (por defecto) | 5,3 GB |
 | LLM `qwen3.5:4b` (opcional, modo rápido) | 3,2 GB |
 | Editor web: Node portable + dependencias de `web\` | 0,2 GB |
-| **Total instalado** | **~11,7 GB** (~14,9 GB con el 4B) |
+| **Total instalado** | **~10,8 GB** (~14,0 GB con el 4B) |
+
+Durante `mangatl setup` el GGUF del 9B (5,3 GB) se descarga a `tmp\` y se borra cuando Ollama ya
+lo copió: hace falta ese espacio extra solo mientras dura la instalación.
 
 Además, cada capítulo procesado ocupa en `output\` unos 5–7 MB por página (páginas
 normalizadas, máscaras, página limpia, página final y CBZ); se puede borrar su carpeta
@@ -598,7 +595,7 @@ el `.zip` portable en `.local\gh`: `env.ps1` la agrega al PATH y guarda su confi
 | [ogkalu/comic-text-and-bubble-detector](https://huggingface.co/ogkalu/comic-text-and-bubble-detector) (RT-DETR-v2) | Apache-2.0 | |
 | fugashi / unidic-lite | MIT / BSD-3-Clause | diccionario japonés para manga-ocr |
 | Ollama | MIT | |
-| Qwen3.5 (`qwen3.5:9b`, `qwen3.5:4b`) | Apache-2.0 | |
+| Qwen3.5 (`qwen3.5-texto:9b`, `qwen3.5:4b`) | Apache-2.0 | el 9B, desde el GGUF de [unsloth/Qwen3.5-9B-GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) (Apache-2.0) |
 | [LaMa](https://github.com/advimman/lama) | Apache-2.0 | arquitectura original |
 | [anime-manga-big-lama](https://huggingface.co/dreMaz/AnimeMangaInpainting) | MIT | pesos afinados para manga; versión TorchScript de [IOPaint](https://github.com/Sanster/IOPaint) (Apache-2.0) |
 | [RapidOCR](https://github.com/RapidAI/RapidOCR) + modelos PP-OCR de PaddleOCR | Apache-2.0 | OCR en inglés |

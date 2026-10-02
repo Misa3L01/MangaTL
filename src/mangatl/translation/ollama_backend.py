@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 from mangatl.config import Settings
 from mangatl.models import Region
+from mangatl.ollama_runtime import effective_extra_options
 from mangatl.translation.alignment import realign
 from mangatl.translation.base import TranslationError, Translator
 from mangatl.translation.json_extract import extract_json_objects
@@ -200,13 +201,20 @@ class OllamaTranslator(Translator):
         self.realigned = 0
         self._auto_layers = False  # set when forced GPU layers (num_gpu) ran out of VRAM
         self.compact = settings.translator.compact_output
+        # Decided once, before the model is loaded (free VRAM check for num_gpu).
+        self._options = effective_extra_options(self.cfg)
 
     # ------------------------------------------------------------------ transport
-    def _extra_options(self) -> dict[str, float | int]:
-        options = dict(self.cfg.extra_options)
+    @property
+    def extra_options(self) -> dict[str, float | int]:
+        """Extra Ollama options this translator sends (also used to warm the model up)."""
+        options = dict(self._options)
         if self._auto_layers:
             options.pop("num_gpu", None)
         return options
+
+    def _extra_options(self) -> dict[str, float | int]:
+        return self.extra_options
 
     def _chat(
         self,

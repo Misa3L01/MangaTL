@@ -71,10 +71,11 @@ def run(args: argparse.Namespace) -> None:
     with runtime.running():
         # Load the model before timing: the first read of the weights from disk (30-120 s
         # for the 9B) would otherwise weigh on whichever variant runs first.
-        load_start = time.perf_counter()
-        runtime.chat(model, "Hola", num_predict=1)
-        load_seconds = time.perf_counter() - load_start
+        # The translator decides its options (free VRAM for num_gpu) before anything loads.
         translator = OllamaTranslator(settings)
+        load_start = time.perf_counter()
+        runtime.chat(model, "Hola", extra=translator.extra_options, num_predict=1)
+        load_seconds = time.perf_counter() - load_start
         start = time.perf_counter()
         stats = translate_chapter(
             project,

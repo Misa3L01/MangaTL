@@ -146,6 +146,10 @@ class OllamaConfig(BaseModel):
     # GPU; 27 is the measured best for the text-only 9B on a 6 GB GPU) or
     # {presence_penalty = 0.0}. Empty: the model's own defaults and automatic layer placement.
     extra_options: dict[str, float | int] = Field(default_factory=dict)
+    # num_gpu is applied only with at least this much free VRAM before loading the model. With
+    # less (another program is using the GPU), forced layers do not fail on Windows: the driver
+    # spills them into shared memory and translation gets slower than automatic placement.
+    num_gpu_min_free_mb: int = Field(4800, ge=0)
     # `mangatl setup` creates this model from a GGUF instead of pulling it (only when its
     # `name` is `model`; any other model is pulled from the Ollama library as usual).
     gguf: GgufImport | None = Field(default_factory=lambda: TEXT_ONLY_QWEN_9B.model_copy())
@@ -165,8 +169,8 @@ class TranslatorConfig(BaseModel):
     manual_part_chars: int = Field(20000, ge=2000)
     # Two passes per block: Japanese -> English draft -> Spanish (about twice as slow).
     pivot_english: bool = False
-    # Stricter speaker rules in the prompt (no invented names, "narración" for caption boxes,
-    # romanized names) and name examples that cannot be taken for characters.
+    # Stricter speaker rules in the prompt (no invented names, "narración" for caption boxes)
+    # and name examples that cannot be taken for characters.
     clear_speaker_rules: bool = True
     # Short JSON keys inside each region and the answer on one line: -34 % output tokens.
     # Keep translator.ollama.recover_repeat_loops on with it.

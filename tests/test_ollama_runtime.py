@@ -94,6 +94,7 @@ def make_runtime(settings: Settings, handler) -> OllamaRuntime:
 
 def test_chat_uses_the_same_extra_options_as_the_translator(settings: Settings) -> None:
     settings.translator.ollama.extra_options = {"num_gpu": 27}
+    settings.translator.ollama.num_gpu_min_free_mb = 0  # no VRAM check in this test
     sent: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -102,6 +103,24 @@ def test_chat_uses_the_same_extra_options_as_the_translator(settings: Settings) 
 
     make_runtime(settings, handler).chat("m", "Hola", num_predict=1)
     assert sent[0]["options"]["num_gpu"] == 27 and sent[0]["options"]["num_predict"] == 1
+
+
+@pytest.mark.parametrize(("free_mb", "kept"), [(5300, True), (4600, False)])
+def test_forced_layers_need_enough_free_vram(
+    settings: Settings, monkeypatch, free_mb: int, kept: bool
+) -> None:
+    from mangatl import gpu
+    from mangatl.ollama_runtime import effective_extra_options
+
+    total = 6141
+    info = gpu.NvidiaSmiInfo("RTX 4050", "616.64", total, total - free_mb)
+    monkeypatch.setattr(gpu, "query_nvidia_smi", lambda: info)
+    cfg = settings.translator.ollama
+    cfg.extra_options = {"num_gpu": 27, "presence_penalty": 0.0}
+    options = effective_extra_options(cfg)
+    assert ("num_gpu" in options) is kept and options["presence_penalty"] == 0.0
+    monkeypatch.setattr(gpu, "query_nvidia_smi", lambda: None)  # no nvidia-smi: trust config
+    assert effective_extra_options(cfg)["num_gpu"] == 27
 
 
 def test_parse_compute_devices() -> None:

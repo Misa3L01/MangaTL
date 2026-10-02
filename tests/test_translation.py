@@ -216,6 +216,7 @@ def test_persistent_loop_splits_the_block_and_isolates_the_region(
 
 def test_ollama_extra_options_reach_the_request(settings: Settings, small_project: Project) -> None:
     settings.translator.ollama.extra_options = {"num_gpu": 22, "presence_penalty": 0.0}
+    settings.translator.ollama.num_gpu_min_free_mb = 0  # no VRAM check in this test
     ctx = ctx_for(small_project)
     tr, reqs = make_ollama(settings, [ollama_reply(fake_answer(ctx).model_dump_json())])
     tr.translate_block("sys", ctx)
@@ -228,6 +229,7 @@ def test_forced_gpu_layers_fall_back_when_vram_runs_out(
     settings: Settings, small_project: Project
 ) -> None:
     settings.translator.ollama.extra_options = {"num_gpu": 27}
+    settings.translator.ollama.num_gpu_min_free_mb = 0  # no VRAM check in this test
     ctx = ctx_for(small_project)
     oom = httpx.Response(
         500, json={"error": "llama runner process has terminated: cudaMalloc failed: out of memory"}

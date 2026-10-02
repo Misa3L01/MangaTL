@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from mangatl.config import GgufImport, Settings
+from mangatl.config import GgufImport, OllamaConfig, Settings
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +79,25 @@ def split_model_name(model: str) -> tuple[str, str, str]:
     name, _, tag = model.partition(":")
     namespace, _, short = name.rpartition("/")
     return namespace or "library", short, tag or "latest"
+
+
+def effective_extra_options(cfg: OllamaConfig) -> dict[str, float | int]:
+    """`extra_options` for this run: without num_gpu when the free VRAM (measured before the
+    model is loaded) cannot hold the forced layers."""
+    options = dict(cfg.extra_options)
+    if "num_gpu" in options and cfg.num_gpu_min_free_mb:
+        from mangatl.gpu import query_nvidia_smi
+
+        info = query_nvidia_smi()
+        if info is not None and info.memory_free_mb < cfg.num_gpu_min_free_mb:
+            log.warning(
+                "Solo hay %d MiB de VRAM libre (otro programa está usando la GPU): se ignora "
+                "num_gpu = %s y Ollama decide cuántas capas caben",
+                info.memory_free_mb,
+                options["num_gpu"],
+            )
+            options.pop("num_gpu")
+    return options
 
 
 def modelfile_text(gguf_path: Path, spec: GgufImport) -> str:
@@ -348,17 +367,19 @@ class OllamaRuntime:
     def loaded_models(self) -> list[str]:
         return [m["name"] for m in self.running_models()]
 
-    def chat(self, model: str, prompt: str, **options: object) -> dict:
+    def chat(self, model: str, prompt: str, extra: dict | None = None, **options: object) -> dict:
         """Single non-streaming chat turn (used for smoke tests; the translator has its own).
 
-        Same extra options as the translator (e.g. num_gpu): a different layer placement
-        would make Ollama reload the model on the first translation request."""
+        Same extra options as the translator (`extra`, by default effective_extra_options):
+        a different layer placement would make Ollama reload the model on the next request."""
+        if extra is None:
+            extra = effective_extra_options(self.cfg)
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "think": self.cfg.think,
-            "options": {**self.cfg.extra_options, "num_ctx": self.cfg.num_ctx, **options},
+            "options": {**extra, "num_ctx": self.cfg.num_ctx, **options},
         }
         resp = self._client.post(f"{self.base_url}/api/chat", json=payload)
         resp.raise_for_status()
