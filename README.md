@@ -316,7 +316,8 @@ el código.
   (onomatopeya con OCR basura), así que conviene usarla con `recover_repeat_loops` (A6).
 - **A5:** el prompt usaba «Shūhei» como ejemplo de romanización y el modelo lo copiaba como
   hablante de 16 globos. Con reglas claras acierta lo mismo pero inventa 4 veces menos; cuando
-  no sabe, dice «desconocido».
+  no sabe, dice «desconocido». Efecto secundario: como solo puede usar nombres que aparecen en
+  el texto, a veces escribe el hablante en japonés («斉藤英二郎»); la traducción no cambia.
 - **A6 `recover_repeat_loops`:** cuando el modelo se queda repitiendo un carácter, Ollama corta
   con un error 500 y antes eso abortaba el capítulo entero. Ahora se reintenta con otra semilla
   y, si persiste, el bloque se parte y la región queda «a revisar».
@@ -377,6 +378,19 @@ RTX 4050 Laptop (6 GB) con 16 GB de RAM, `num_ctx = 16384`:
 La traducción es más del 90 % del tiempo con el 9B. Con `--model qwen3.5:4b` un capítulo
 japonés así tarda ~7 min. Con el backend `manual`, detección + OCR + prompts tardan menos de
 un minuto.
+
+Esta tabla es de la configuración anterior (`qwen3.5:9b`, 18 capas en la GPU). Con la actual
+(`qwen3.5-texto:9b`, salida compacta y `num_gpu = 27`), la traducción de las 12 páginas de
+referencia bajó de 616 s a 274 s (2,25×); las demás etapas no cambian, así que un capítulo
+como este debería rondar ~13 min en vez de ~26. Ese número es una estimación: la medición del
+capítulo completo con la configuración nueva quedó pendiente.
+
+**Con la PC ocupada** (otra aplicación usando la GPU y solo 1,7 GB de RAM libre) las mismas 12
+páginas tardaron 606 s con 27 capas forzadas y 594 s con el reparto automático: lo que frena es
+la carga del equipo, no la configuración. Para la mejor velocidad, cierra juegos, el navegador y
+otras apps que usen la GPU. Como protección, `num_gpu` solo se aplica si antes de cargar el
+modelo quedan al menos `num_gpu_min_free_mb` (4800 MiB) de VRAM libre; si no, Ollama reparte las
+capas solo (en Windows, las capas forzadas que no caben no dan error: pasan a memoria compartida).
 
 ### Limitaciones actuales (Fase 2)
 
